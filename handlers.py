@@ -1,11 +1,7 @@
 import asyncio
 import uuid
 from telethon import events
-from config import (
-    logger, is_running, current_task, 
-    active_sessions, CHUNK_SIZE, QUEUE_SIZE,
-    UPLOAD_PART_SIZE, UPDATE_INTERVAL, MAX_RETRIES
-)
+import config
 from keyboards import (
     get_settings_keyboard, get_confirm_keyboard,
     get_skip_keyboard, get_clone_info_keyboard
@@ -20,9 +16,9 @@ def register_handlers(user_client, bot_client):
         await event.respond(
             "🚀 **EXTREME MODE BOT v2.0**\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
-            f"⚡ Chunks: **{CHUNK_SIZE // (1024*1024)}MB** × {QUEUE_SIZE} Queue\n"
-            f"💾 Buffer: **{(CHUNK_SIZE * QUEUE_SIZE) // (1024*1024)}MB**\n"
-            f"🔥 Upload Parts: **{UPLOAD_PART_SIZE // 1024}MB**\n"
+            f"⚡ Chunks: **{config.CHUNK_SIZE // (1024*1024)}MB** × {config.QUEUE_SIZE} Queue\n"
+            f"💾 Buffer: **{(config.CHUNK_SIZE * config.QUEUE_SIZE) // (1024*1024)}MB**\n"
+            f"🔥 Upload Parts: **{config.UPLOAD_PART_SIZE // 1024}MB**\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
             "**Features:**\n"
             "✅ All file types support\n"
@@ -70,8 +66,7 @@ def register_handlers(user_client, bot_client):
     
     @bot_client.on(events.NewMessage(pattern='/clone'))
     async def clone_init(event):
-        global is_running
-        if is_running: 
+        if config.is_running: 
             return await event.respond(
                 "⚠️ **Already running a task!**\n"
                 "Use `/stop` to cancel current transfer."
@@ -86,7 +81,7 @@ def register_handlers(user_client, bot_client):
             
             # Create session
             session_id = str(uuid.uuid4())
-            active_sessions[session_id] = {
+            config.active_sessions[session_id] = {
                 'source': source_id,
                 'dest': dest_id,
                 'settings': {},
@@ -141,24 +136,24 @@ def register_handlers(user_client, bot_client):
         await event.respond(
             f"📊 **EXTREME MODE Statistics**\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"⚡ Chunk Size: **{CHUNK_SIZE // (1024*1024)}MB**\n"
-            f"💾 Queue Size: **{QUEUE_SIZE} chunks**\n"
-            f"📦 Buffer: **{(CHUNK_SIZE * QUEUE_SIZE) // (1024*1024)}MB**\n"
-            f"📤 Upload Parts: **{UPLOAD_PART_SIZE // 1024}MB**\n"
-            f"🔄 Max Retries: **{MAX_RETRIES}**\n"
-            f"⏱️ Update Interval: **{UPDATE_INTERVAL}s**\n"
+            f"⚡ Chunk Size: **{config.CHUNK_SIZE // (1024*1024)}MB**\n"
+            f"💾 Queue Size: **{config.QUEUE_SIZE} chunks**\n"
+            f"📦 Buffer: **{(config.CHUNK_SIZE * config.QUEUE_SIZE) // (1024*1024)}MB**\n"
+            f"📤 Upload Parts: **{config.UPLOAD_PART_SIZE // 1024}MB**\n"
+            f"🔄 Max Retries: **{config.MAX_RETRIES}**\n"
+            f"⏱️ Update Interval: **{config.UPDATE_INTERVAL}s**\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🚀 Status: **{'🟢 Running' if is_running else '🔴 Idle'}**\n"
-            f"📊 Active Sessions: **{len(active_sessions)}**"
+            f"🚀 Status: **{'🟢 Running' if config.is_running else '🔴 Idle'}**\n"
+            f"📊 Active Sessions: **{len(config.active_sessions)}**"
         )
     
     @bot_client.on(events.CallbackQuery(pattern=r'set_fname_(.+)'))
     async def set_filename_callback(event):
         session_id = event.data.decode().split('_')[2]
-        if session_id not in active_sessions:
+        if session_id not in config.active_sessions:
             return await event.answer("❌ Session expired!", alert=True)
         
-        active_sessions[session_id]['step'] = 'fname_find'
+        config.active_sessions[session_id]['step'] = 'fname_find'
         await event.edit(
             "📝 **Filename Modification**\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -171,10 +166,10 @@ def register_handlers(user_client, bot_client):
     @bot_client.on(events.CallbackQuery(pattern=r'set_fcap_(.+)'))
     async def set_caption_find_callback(event):
         session_id = event.data.decode().split('_')[2]
-        if session_id not in active_sessions:
+        if session_id not in config.active_sessions:
             return await event.answer("❌ Session expired!", alert=True)
         
-        active_sessions[session_id]['step'] = 'cap_find'
+        config.active_sessions[session_id]['step'] = 'cap_find'
         await event.edit(
             "💬 **Caption Modification**\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -187,10 +182,10 @@ def register_handlers(user_client, bot_client):
     @bot_client.on(events.CallbackQuery(pattern=r'set_xcap_(.+)'))
     async def set_extra_caption_callback(event):
         session_id = event.data.decode().split('_')[2]
-        if session_id not in active_sessions:
+        if session_id not in config.active_sessions:
             return await event.answer("❌ Session expired!", alert=True)
         
-        active_sessions[session_id]['step'] = 'extra_cap'
+        config.active_sessions[session_id]['step'] = 'extra_cap'
         await event.edit(
             "➕ **Extra Caption**\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -203,18 +198,18 @@ def register_handlers(user_client, bot_client):
     @bot_client.on(events.CallbackQuery(pattern=r'skip_(.+)'))
     async def skip_callback(event):
         session_id = event.data.decode().split('_')[1]
-        if session_id not in active_sessions:
+        if session_id not in config.active_sessions:
             return await event.answer("❌ Session expired!", alert=True)
         
-        step = active_sessions[session_id]['step']
+        step = config.active_sessions[session_id]['step']
         
         # Skip current step
         if step == 'fname_find':
-            active_sessions[session_id]['step'] = 'settings'
+            config.active_sessions[session_id]['step'] = 'settings'
         elif step == 'cap_find':
-            active_sessions[session_id]['step'] = 'settings'
+            config.active_sessions[session_id]['step'] = 'settings'
         elif step == 'extra_cap':
-            active_sessions[session_id]['step'] = 'settings'
+            config.active_sessions[session_id]['step'] = 'settings'
         
         await event.answer("⏭️ Skipped!", alert=False)
         await event.edit(
@@ -227,10 +222,10 @@ def register_handlers(user_client, bot_client):
     @bot_client.on(events.CallbackQuery(pattern=r'confirm_(.+)'))
     async def confirm_callback(event):
         session_id = event.data.decode().split('_')[1]
-        if session_id not in active_sessions:
+        if session_id not in config.active_sessions:
             return await event.answer("❌ Session expired!", alert=True)
         
-        settings = active_sessions[session_id]['settings']
+        settings = config.active_sessions[session_id]['settings']
         settings_text, keyboard = get_confirm_keyboard(session_id, settings)
         
         await event.edit(
@@ -244,7 +239,7 @@ def register_handlers(user_client, bot_client):
     @bot_client.on(events.CallbackQuery(pattern=r'back_(.+)'))
     async def back_callback(event):
         session_id = event.data.decode().split('_')[1]
-        if session_id not in active_sessions:
+        if session_id not in config.active_sessions:
             return await event.answer("❌ Session expired!", alert=True)
         
         await event.edit(
@@ -257,10 +252,10 @@ def register_handlers(user_client, bot_client):
     @bot_client.on(events.CallbackQuery(pattern=r'clear_(.+)'))
     async def clear_callback(event):
         session_id = event.data.decode().split('_')[1]
-        if session_id not in active_sessions:
+        if session_id not in config.active_sessions:
             return await event.answer("❌ Session expired!", alert=True)
         
-        active_sessions[session_id]['settings'] = {}
+        config.active_sessions[session_id]['settings'] = {}
         await event.answer("🗑️ All settings cleared!", alert=True)
         await event.edit(
             "✅ **Settings Cleared**\n"
@@ -272,10 +267,10 @@ def register_handlers(user_client, bot_client):
     @bot_client.on(events.CallbackQuery(pattern=r'start_(.+)'))
     async def start_transfer_callback(event):
         session_id = event.data.decode().split('_')[1]
-        if session_id not in active_sessions:
+        if session_id not in config.active_sessions:
             return await event.answer("❌ Session expired!", alert=True)
         
-        active_sessions[session_id]['step'] = 'range'
+        config.active_sessions[session_id]['step'] = 'range'
         await event.edit(
             "📍 **Send Message Range**\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -291,26 +286,24 @@ def register_handlers(user_client, bot_client):
     @bot_client.on(events.CallbackQuery(pattern=r'cancel_(.+)'))
     async def cancel_callback(event):
         session_id = event.data.decode().split('_')[1]
-        if session_id in active_sessions:
-            del active_sessions[session_id]
+        if session_id in config.active_sessions:
+            del config.active_sessions[session_id]
         await event.answer("❌ Cancelled!", alert=True)
         await event.edit("❌ **Transfer Cancelled**")
     
     @bot_client.on(events.CallbackQuery(pattern=b'stop_transfer'))
     async def stop_transfer_callback(event):
-        global is_running, current_task
-        is_running = False
-        if current_task:
-            current_task.cancel()
+        config.is_running = False
+        if config.current_task:
+            config.current_task.cancel()
         await event.answer("🛑 Stopping transfer...", alert=True)
     
     @bot_client.on(events.NewMessage())
     async def message_handler(event):
-        global is_running, current_task
         
         # Find active session for this chat
         session_id = None
-        for sid, data in active_sessions.items():
+        for sid, data in config.active_sessions.items():
             if data['chat_id'] == event.chat_id:
                 session_id = sid
                 break
@@ -318,7 +311,7 @@ def register_handlers(user_client, bot_client):
         if not session_id:
             return
         
-        session = active_sessions[session_id]
+        session = config.active_sessions[session_id]
         step = session.get('step')
         
         # Handle different steps
@@ -379,8 +372,8 @@ def register_handlers(user_client, bot_client):
                 if msg1 > msg2: 
                     msg1, msg2 = msg2, msg1
                 
-                is_running = True
-                current_task = asyncio.create_task(
+                config.is_running = True
+                config.current_task = asyncio.create_task(
                     transfer_process(
                         event, 
                         user_client,
@@ -405,25 +398,24 @@ def register_handlers(user_client, bot_client):
         await event.respond(
             f"📊 **EXTREME MODE Stats**\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"⚡ Chunk: **{CHUNK_SIZE // (1024*1024)}MB**\n"
-            f"💾 Buffer: **{(CHUNK_SIZE * QUEUE_SIZE) // (1024*1024)}MB**\n"
-            f"📤 Upload: **{UPLOAD_PART_SIZE // 1024}MB parts**\n"
-            f"🔄 Retries: **{MAX_RETRIES}**\n"
-            f"⏱️ Updates: **Every {UPDATE_INTERVAL}s**\n"
+            f"⚡ Chunk: **{config.CHUNK_SIZE // (1024*1024)}MB**\n"
+            f"💾 Buffer: **{(config.CHUNK_SIZE * config.QUEUE_SIZE) // (1024*1024)}MB**\n"
+            f"📤 Upload: **{config.UPLOAD_PART_SIZE // 1024}MB parts**\n"
+            f"🔄 Retries: **{config.MAX_RETRIES}**\n"
+            f"⏱️ Updates: **Every {config.UPDATE_INTERVAL}s**\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🚀 Status: **{'Running' if is_running else 'Idle'}**\n"
-            f"📊 Sessions: **{len(active_sessions)}**"
+            f"🚀 Status: **{'Running' if config.is_running else 'Idle'}**\n"
+            f"📊 Sessions: **{len(config.active_sessions)}**"
         )
     
     @bot_client.on(events.NewMessage(pattern='/stop'))
     async def stop_handler(event):
-        global is_running, current_task
-        if not is_running:
+        if not config.is_running:
             return await event.respond("⚠️ No active transfer to stop!")
         
-        is_running = False
-        if current_task: 
-            current_task.cancel()
+        config.is_running = False
+        if config.current_task: 
+            config.current_task.cancel()
         await event.respond("🛑 **Transfer stopped!**")
     
-    logger.info("✅ All handlers registered successfully!")
+    config.logger.info("✅ All handlers registered successfully!")
