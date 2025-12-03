@@ -7,10 +7,7 @@ from telethon.tl.types import (
     DocumentAttributeVideo, 
     DocumentAttributeAudio
 )
-from config import (
-    logger, is_running, UPLOAD_PART_SIZE, 
-    MAX_RETRIES, active_sessions
-)
+import config
 from utils import (
     human_readable_size, time_formatter, 
     get_target_info, apply_filename_manipulations,
@@ -21,9 +18,8 @@ from keyboards import get_progress_keyboard
 
 async def transfer_process(event, user_client, bot_client, source_id, dest_id, start_msg, end_msg, session_id):
     """Main transfer process with all features"""
-    global is_running
     
-    settings = active_sessions.get(session_id, {}).get('settings', {})
+    settings = config.active_sessions.get(session_id, {}).get('settings', {})
     
     status_message = await event.respond(
         f"🚀 **EXTREME MODE ACTIVATED!**\n"
@@ -45,7 +41,7 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
             max_id=end_msg+1, 
             reverse=True
         ):
-            if not is_running:
+            if not config.is_running:
                 await status_message.edit(
                     "🛑 **Transfer Stopped by User!**\n"
                     f"✅ Processed: {total_processed}\n"
@@ -57,7 +53,7 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
             if getattr(message, 'action', None): 
                 continue
 
-            retries = MAX_RETRIES
+            retries = config.MAX_RETRIES
             success = False
             stream_file = None
             
@@ -92,7 +88,7 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
                     await status_message.edit(
                         f"🚀 **EXTREME TRANSFER**\n"
                         f"📂 `{file_name[:40]}...`\n"
-                        f"💪 Attempt: {MAX_RETRIES - retries + 1}/{MAX_RETRIES}\n"
+                        f"💪 Attempt: {config.MAX_RETRIES - retries + 1}/{config.MAX_RETRIES}\n"
                         f"📊 Progress: {total_processed}/{end_msg - start_msg + 1}",
                         buttons=get_progress_keyboard()
                     )
@@ -149,7 +145,7 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
                         supports_streaming=True,
                         file_size=fresh_msg.file.size,
                         force_document=not is_video_mode,
-                        part_size_kb=UPLOAD_PART_SIZE
+                        part_size_kb=config.UPLOAD_PART_SIZE
                     )
                     
                     # Cleanup thumbnail
@@ -169,13 +165,13 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
                     )
 
                 except (errors.FileReferenceExpiredError, errors.MediaEmptyError):
-                    logger.warning(f"🔄 Ref expired on {message.id}, refreshing...")
+                    config.logger.warning(f"🔄 Ref expired on {message.id}, refreshing...")
                     retries -= 1
                     await asyncio.sleep(2)
                     continue 
                     
                 except errors.FloodWaitError as e:
-                    logger.warning(f"⏳ FloodWait {e.seconds}s")
+                    config.logger.warning(f"⏳ FloodWait {e.seconds}s")
                     await status_message.edit(
                         f"⏳ **Cooling Down...**\n"
                         f"Waiting: `{e.seconds}s`\n"
@@ -185,7 +181,7 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
                     await asyncio.sleep(e.seconds)
                 
                 except MemoryError:
-                    logger.error("💥 RAM LIMIT HIT! Skipping file...")
+                    config.logger.error("💥 RAM LIMIT HIT! Skipping file...")
                     await status_message.edit(
                         f"⚠️ **RAM Overflow!**\n"
                         f"File too large, skipping...\n"
@@ -196,7 +192,7 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
                     retries = 0
                 
                 except Exception as e:
-                    logger.error(f"❌ Failed {message.id}: {e}")
+                    config.logger.error(f"❌ Failed {message.id}: {e}")
                     retries -= 1
                     if retries > 0:
                         await asyncio.sleep(3)
@@ -211,7 +207,7 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
                 try: 
                     await bot_client.send_message(
                         event.chat_id, 
-                        f"❌ **FAILED:** Message ID `{message.id}` after {MAX_RETRIES} attempts."
+                        f"❌ **FAILED:** Message ID `{message.id}` after {config.MAX_RETRIES} attempts."
                     )
                 except: 
                     pass
@@ -222,7 +218,7 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
             if total_processed % 5 == 0:
                 await asyncio.sleep(2)
 
-        if is_running:
+        if config.is_running:
             overall_time = time.time() - overall_start
             avg_speed = total_size / overall_time / (1024*1024) if overall_time > 0 else 0
             
@@ -237,8 +233,8 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
 
     except Exception as e:
         await status_message.edit(f"💥 **Critical Error:** {str(e)[:100]}")
-        logger.error(f"Transfer crashed: {e}")
+        config.logger.error(f"Transfer crashed: {e}")
     finally:
-        is_running = False
-        if session_id in active_sessions:
-            del active_sessions[session_id]
+        config.is_running = False
+        if session_id in config.active_sessions:
+            del config.active_sessions[session_id]
