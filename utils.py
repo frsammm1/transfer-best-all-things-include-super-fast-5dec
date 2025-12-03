@@ -1,9 +1,6 @@
-import time
-import math
 import os
 import mimetypes
 from telethon.tl.types import MessageMediaWebPage
-from config import logger
 
 def human_readable_size(size):
     """Convert bytes to human readable format"""
