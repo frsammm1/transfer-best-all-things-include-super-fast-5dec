@@ -17,35 +17,45 @@ from stream import ExtremeBufferedStream
 from keyboards import get_progress_keyboard
 
 async def transfer_process(event, user_client, bot_client, source_id, dest_id, start_msg, end_msg, session_id):
-    """Main transfer process with all features"""
+    """Main transfer process with all features - FIXED VERSION"""
     
     settings = config.active_sessions.get(session_id, {}).get('settings', {})
     
     status_message = await event.respond(
-        f"🚀 **EXTREME MODE ACTIVATED!**\n"
-        f"⚡ Chunk: 32MB | Buffer: 160MB (5×)\n"
-        f"🔥 Max Speed Unlocked!\n"
+        f"🚀 **Starting Transfer...**\n"
+        f"⚡ Optimized for Render Free Tier\n"
+        f"💾 Buffer: 16MB (8MB × 2)\n"
         f"📍 Source: `{source_id}` → Dest: `{dest_id}`",
         buttons=get_progress_keyboard()
     )
     
+    config.status_message = status_message
     total_processed = 0
+    total_success = 0
     total_size = 0
     total_skipped = 0
     overall_start = time.time()
     
     try:
+        messages = []
         async for message in user_client.iter_messages(
             source_id, 
             min_id=start_msg-1, 
             max_id=end_msg+1, 
             reverse=True
         ):
-            if not config.is_running:
+            messages.append(message)
+        
+        config.logger.info(f"📋 Total messages to process: {len(messages)}")
+        
+        for idx, message in enumerate(messages, 1):
+            # Check stop flag
+            if config.stop_flag or not config.is_running:
                 await status_message.edit(
-                    "🛑 **Transfer Stopped by User!**\n"
-                    f"✅ Processed: {total_processed}\n"
-                    f"⏭️ Skipped: {total_skipped}"
+                    "🛑 **Transfer Stopped!**\n"
+                    f"✅ Success: {total_success}\n"
+                    f"⏭️ Skipped: {total_skipped}\n"
+                    f"📊 Total: {total_processed}"
                 )
                 break
 
@@ -53,188 +63,205 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
             if getattr(message, 'action', None): 
                 continue
 
-            retries = config.MAX_RETRIES
-            success = False
             stream_file = None
             
-            while retries > 0 and not success:
+            try:
+                # Handle text-only messages
+                if not message.media or not message.file:
+                    if message.text:
+                        modified_text = apply_caption_manipulations(message.text, settings)
+                        await bot_client.send_message(dest_id, modified_text)
+                        total_success += 1
+                    total_processed += 1
+                    continue
+
+                # Get file info
+                file_name, mime_type, is_video_mode = get_target_info(message)
+                
+                if not file_name:
+                    total_processed += 1
+                    continue
+                
+                # Apply manipulations
+                file_name = apply_filename_manipulations(file_name, settings)
+                file_name = sanitize_filename(file_name)
+
+                await status_message.edit(
+                    f"⬇️ **Downloading...**\n"
+                    f"📂 `{file_name[:35]}...`\n"
+                    f"📊 File {idx}/{len(messages)}\n"
+                    f"✅ Success: {total_success} | ⏭️ Skip: {total_skipped}",
+                    buttons=get_progress_keyboard()
+                )
+
+                start_time = time.time()
+                
+                # Prepare attributes
+                attributes = [DocumentAttributeFilename(file_name=file_name)]
+                
+                if hasattr(message, 'document') and message.document:
+                    for attr in message.document.attributes:
+                        if isinstance(attr, DocumentAttributeVideo):
+                            attributes.append(DocumentAttributeVideo(
+                                duration=attr.duration,
+                                w=attr.w,
+                                h=attr.h,
+                                supports_streaming=True
+                            ))
+                        elif isinstance(attr, DocumentAttributeAudio):
+                            attributes.append(attr)
+
+                # Download thumbnail
+                thumb = None
                 try:
-                    # Refresh message to avoid expired references
-                    fresh_msg = await user_client.get_messages(source_id, ids=message.id)
-                    if not fresh_msg: 
-                        break 
-
-                    # Handle text-only messages
-                    if not fresh_msg.media or not fresh_msg.file:
-                        if fresh_msg.text:
-                            modified_text = apply_caption_manipulations(fresh_msg.text, settings)
-                            await bot_client.send_message(dest_id, modified_text)
-                            success = True
-                        else:
-                            success = True
-                        continue
-
-                    # Get file info with smart format detection
-                    file_name, mime_type, is_video_mode = get_target_info(fresh_msg)
-                    
-                    if not file_name:
-                        success = True
-                        continue
-                    
-                    # Apply filename manipulations
-                    file_name = apply_filename_manipulations(file_name, settings)
-                    file_name = sanitize_filename(file_name)
-
-                    await status_message.edit(
-                        f"🚀 **EXTREME TRANSFER**\n"
-                        f"📂 `{file_name[:40]}...`\n"
-                        f"💪 Attempt: {config.MAX_RETRIES - retries + 1}/{config.MAX_RETRIES}\n"
-                        f"📊 Progress: {total_processed}/{end_msg - start_msg + 1}",
-                        buttons=get_progress_keyboard()
-                    )
-
-                    start_time = time.time()
-                    
-                    # Prepare attributes
-                    attributes = [DocumentAttributeFilename(file_name=file_name)]
-                    
-                    if hasattr(fresh_msg, 'document') and fresh_msg.document:
-                        for attr in fresh_msg.document.attributes:
-                            if isinstance(attr, DocumentAttributeVideo):
-                                attributes.append(DocumentAttributeVideo(
-                                    duration=attr.duration,
-                                    w=attr.w,
-                                    h=attr.h,
-                                    supports_streaming=True
-                                ))
-                            elif isinstance(attr, DocumentAttributeAudio):
-                                attributes.append(attr)
-
-                    # Download thumbnail
-                    thumb = None
+                    thumb = await user_client.download_media(message, thumb=-1)
+                except:
+                    pass
+                
+                # Prepare media object
+                media_obj = (message.media.document 
+                            if hasattr(message.media, 'document') 
+                            else message.media.photo)
+                
+                # CREATE STREAM
+                stream_file = ExtremeBufferedStream(
+                    user_client, 
+                    media_obj,
+                    message.file.size,
+                    file_name,
+                    start_time,
+                    status_message
+                )
+                
+                # Apply caption manipulations
+                modified_caption = apply_caption_manipulations(message.text, settings)
+                
+                # Update status before upload
+                await status_message.edit(
+                    f"⬆️ **Uploading...**\n"
+                    f"📂 `{file_name[:35]}...`\n"
+                    f"📊 File {idx}/{len(messages)}\n"
+                    f"✅ Success: {total_success} | ⏭️ Skip: {total_skipped}",
+                    buttons=get_progress_keyboard()
+                )
+                
+                # UPLOAD WITH RETRY LOGIC
+                retry_count = 0
+                uploaded = False
+                
+                while retry_count < config.MAX_RETRIES and not uploaded:
                     try:
-                        thumb = await user_client.download_media(fresh_msg, thumb=-1)
+                        await bot_client.send_file(
+                            dest_id,
+                            file=stream_file,
+                            caption=modified_caption,
+                            attributes=attributes,
+                            thumb=thumb,
+                            supports_streaming=True,
+                            file_size=message.file.size,
+                            force_document=not is_video_mode,
+                            part_size_kb=config.UPLOAD_PART_SIZE
+                        )
+                        uploaded = True
+                        
+                    except errors.FloodWaitError as e:
+                        config.logger.warning(f"⏳ FloodWait {e.seconds}s")
+                        await status_message.edit(
+                            f"⏳ **Cooling Down...**\n"
+                            f"Waiting: `{e.seconds}s`\n"
+                            f"Then resuming...",
+                            buttons=get_progress_keyboard()
+                        )
+                        await asyncio.sleep(e.seconds)
+                        retry_count += 1
+                        
+                    except Exception as e:
+                        config.logger.error(f"Upload error: {e}")
+                        retry_count += 1
+                        if retry_count < config.MAX_RETRIES:
+                            await asyncio.sleep(2)
+                        else:
+                            raise
+                
+                # Cleanup thumbnail
+                if thumb and os.path.exists(thumb): 
+                    try:
+                        os.remove(thumb)
                     except:
                         pass
-                    
-                    # Prepare media object
-                    media_obj = (fresh_msg.media.document 
-                                if hasattr(fresh_msg.media, 'document') 
-                                else fresh_msg.media.photo)
-                    
-                    # CREATE EXTREME STREAM
-                    stream_file = ExtremeBufferedStream(
-                        user_client, 
-                        media_obj,
-                        fresh_msg.file.size,
-                        file_name,
-                        start_time,
-                        status_message
-                    )
-                    
-                    # Apply caption manipulations
-                    modified_caption = apply_caption_manipulations(fresh_msg.text, settings)
-                    
-                    # UPLOAD WITH EXTREME SETTINGS
-                    await bot_client.send_file(
-                        dest_id,
-                        file=stream_file,
-                        caption=modified_caption,
-                        attributes=attributes,
-                        thumb=thumb,
-                        supports_streaming=True,
-                        file_size=fresh_msg.file.size,
-                        force_document=not is_video_mode,
-                        part_size_kb=config.UPLOAD_PART_SIZE
-                    )
-                    
-                    # Cleanup thumbnail
-                    if thumb and os.path.exists(thumb): 
-                        os.remove(thumb)
-                    
-                    success = True
-                    elapsed = time.time() - start_time
-                    speed = fresh_msg.file.size / elapsed / (1024*1024) if elapsed > 0 else 0
-                    total_size += fresh_msg.file.size
-                    
-                    await status_message.edit(
-                        f"✅ **SENT:** `{file_name[:40]}...`\n"
-                        f"⚡ Speed: `{speed:.1f} MB/s`\n"
-                        f"📦 Files: {total_processed + 1}/{end_msg - start_msg + 1}",
-                        buttons=get_progress_keyboard()
-                    )
+                
+                elapsed = time.time() - start_time
+                speed = message.file.size / elapsed / (1024*1024) if elapsed > 0 else 0
+                total_size += message.file.size
+                total_success += 1
+                
+                await status_message.edit(
+                    f"✅ **Sent:** `{file_name[:30]}...`\n"
+                    f"⚡ {speed:.1f} MB/s in {elapsed:.1f}s\n"
+                    f"📊 Progress: {idx}/{len(messages)}\n"
+                    f"✅ Success: {total_success} | ⏭️ Skip: {total_skipped}",
+                    buttons=get_progress_keyboard()
+                )
 
-                except (errors.FileReferenceExpiredError, errors.MediaEmptyError):
-                    config.logger.warning(f"🔄 Ref expired on {message.id}, refreshing...")
-                    retries -= 1
-                    await asyncio.sleep(2)
-                    continue 
-                    
-                except errors.FloodWaitError as e:
-                    config.logger.warning(f"⏳ FloodWait {e.seconds}s")
-                    await status_message.edit(
-                        f"⏳ **Cooling Down...**\n"
-                        f"Waiting: `{e.seconds}s`\n"
-                        f"Resume after cooldown...",
-                        buttons=get_progress_keyboard()
-                    )
-                    await asyncio.sleep(e.seconds)
-                
-                except MemoryError:
-                    config.logger.error("💥 RAM LIMIT HIT! Skipping file...")
-                    await status_message.edit(
-                        f"⚠️ **RAM Overflow!**\n"
-                        f"File too large, skipping...\n"
-                        f"File: `{file_name[:40]}...`",
-                        buttons=get_progress_keyboard()
-                    )
-                    total_skipped += 1
-                    retries = 0
-                
-                except Exception as e:
-                    config.logger.error(f"❌ Failed {message.id}: {e}")
-                    retries -= 1
-                    if retries > 0:
-                        await asyncio.sleep(3)
-                
-                finally:
-                    # CRITICAL: Always close stream
-                    if stream_file:
-                        await stream_file.close()
-
-            if not success:
+            except MemoryError:
+                config.logger.error("💥 RAM LIMIT! Skipping file...")
+                await status_message.edit(
+                    f"⚠️ **RAM Overflow - Skipped!**\n"
+                    f"File: `{file_name[:30] if 'file_name' in locals() else 'Unknown'}...`\n"
+                    f"Continuing with next...",
+                    buttons=get_progress_keyboard()
+                )
                 total_skipped += 1
-                try: 
-                    await bot_client.send_message(
-                        event.chat_id, 
-                        f"❌ **FAILED:** Message ID `{message.id}` after {config.MAX_RETRIES} attempts."
-                    )
-                except: 
-                    pass
+                await asyncio.sleep(2)
+            
+            except Exception as e:
+                config.logger.error(f"❌ Error on msg {message.id}: {e}")
+                total_skipped += 1
+                await status_message.edit(
+                    f"❌ **Failed - Skipping**\n"
+                    f"Error: `{str(e)[:30]}...`\n"
+                    f"Progress: {idx}/{len(messages)}",
+                    buttons=get_progress_keyboard()
+                )
+                await asyncio.sleep(1)
+            
+            finally:
+                # CRITICAL: Always close stream
+                if stream_file:
+                    try:
+                        await stream_file.close()
+                    except:
+                        pass
             
             total_processed += 1
             
-            # Memory management: pause every 5 files
-            if total_processed % 5 == 0:
-                await asyncio.sleep(2)
+            # Memory management: Small pause every 3 files
+            if total_processed % 3 == 0:
+                await asyncio.sleep(1)
 
-        if config.is_running:
+        # Final summary
+        if config.is_running or config.stop_flag:
             overall_time = time.time() - overall_start
             avg_speed = total_size / overall_time / (1024*1024) if overall_time > 0 else 0
             
             await status_message.edit(
-                f"🏁 **EXTREME MODE COMPLETE!**\n"
-                f"✅ Files: `{total_processed}`\n"
+                f"🏁 **Transfer Complete!**\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"✅ Success: `{total_success}`\n"
                 f"⏭️ Skipped: `{total_skipped}`\n"
-                f"📦 Size: `{human_readable_size(total_size)}`\n"
+                f"📦 Total Size: `{human_readable_size(total_size)}`\n"
                 f"⚡ Avg Speed: `{avg_speed:.1f} MB/s`\n"
                 f"⏱️ Time: `{time_formatter(overall_time)}`"
             )
 
     except Exception as e:
-        await status_message.edit(f"💥 **Critical Error:** {str(e)[:100]}")
-        config.logger.error(f"Transfer crashed: {e}")
+        await status_message.edit(f"💥 **Critical Error:**\n`{str(e)[:100]}`")
+        config.logger.error(f"Transfer crashed: {e}", exc_info=True)
+    
     finally:
         config.is_running = False
+        config.stop_flag = False
+        config.status_message = None
         if session_id in config.active_sessions:
             del config.active_sessions[session_id]
+        config.logger.info("✅ Transfer process cleanup complete")
