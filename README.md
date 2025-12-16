@@ -39,19 +39,37 @@ The ultimate high-performance Telegram File Transfer Bot, now with an enhanced s
 
 ## 🛠 Deployment
 
-### 1. Variables
-| Variable | Description |
-| :--- | :--- |
-| `API_ID` | Your Telegram API ID |
-| `API_HASH` | Your Telegram API Hash |
-| `BOT_TOKEN` | Bot Token from @BotFather |
-| `ADMIN_ID` | Your Telegram User ID (Controller) |
-| `PORT` | Web server port (Default: 8080) |
+### Option 1: One-Click Heroku Deploy
 
-### 2. Deploy
+[![Deploy](https://www.herokucdn.com/deploy/button.svg)](https://heroku.com/deploy)
+
+1. Click the button above.
+2. Fill in the required environment variables:
+   - `API_ID`: Your Telegram API ID
+   - `API_HASH`: Your Telegram API Hash
+   - `BOT_TOKEN`: Your Bot Token
+   - `ADMIN_ID`: Your Telegram User ID
+3. Click "Deploy App".
+
+### Option 2: Manual VPS/Local Deploy
+
 1. Clone the repository.
-2. Install dependencies: `pip install -r requirements.txt`.
-3. Run: `python3 main.py`.
+   ```bash
+   git clone https://github.com/yourusername/repo.git
+   cd repo
+   ```
+
+2. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. Set up environment variables (create a `.env` file or export them).
+
+4. Run the bot:
+   ```bash
+   python3 main.py
+   ```
 
 ---
 
