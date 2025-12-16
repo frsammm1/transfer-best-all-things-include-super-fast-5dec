@@ -46,7 +46,7 @@ def register_handlers(bot_client):
                 "`/login` - Login to your account\n"
                 "`/clone` - Start transfer"
             )
-            return
+            raise events.StopPropagation
 
         # Paid User View
         if status == "PAID":
@@ -79,6 +79,7 @@ def register_handlers(bot_client):
                 "✅ Smart Split & Rename\n\n"
                 "👉 Send `/buy` to request access."
             )
+        raise events.StopPropagation
 
     # --- BUY HANDLER ---
     @bot_client.on(events.NewMessage(pattern='/buy'))
@@ -103,6 +104,7 @@ def register_handlers(bot_client):
             )
         except Exception as e:
             config.logger.error(f"Failed to notify admin: {e}")
+        raise events.StopPropagation
 
     # --- ADMIN COMMANDS ---
     @bot_client.on(events.NewMessage(pattern=r'/add_user (\d+) (.+)'))
@@ -202,6 +204,7 @@ def register_handlers(bot_client):
             "Please send your **Phone Number** in international format.\n"
             "Example: `+1234567890`"
         )
+        raise events.StopPropagation
 
     @bot_client.on(events.NewMessage())
     async def login_conversation(event):
@@ -297,6 +300,7 @@ def register_handlers(bot_client):
         user_id = event.sender_id
         await db.update_user_session(user_id, None, None)
         await event.respond("👋 **Logged Out**")
+        raise events.StopPropagation
 
     # --- CLONE HANDLER (UPDATED) ---
     @bot_client.on(events.NewMessage(pattern='/clone'))
@@ -307,20 +311,23 @@ def register_handlers(bot_client):
         if user_id != config.ADMIN_ID:
             is_valid, _, _ = await db.check_user(user_id)
             if not is_valid:
-                return await event.respond("❌ Subscription Expired/Missing. Use `/buy`.")
+                await event.respond("❌ Subscription Expired/Missing. Use `/buy`.")
+                raise events.StopPropagation
 
         # 2. Check Login
         is_valid, session, _ = await db.check_user(user_id)
         if not session:
-            return await event.respond("❌ Not Logged In. Use `/login` first.")
+            await event.respond("❌ Not Logged In. Use `/login` first.")
+            raise events.StopPropagation
 
         # 3. Check if busy
         if config.is_running: 
-            return await event.respond(
+            await event.respond(
                 "⚠️ **Bot is Busy!**\n"
                 "Someone is currently running a transfer.\n"
                 "Please wait for them to finish."
             )
+            raise events.StopPropagation
         
         try:
             args = event.text.split()
@@ -358,6 +365,7 @@ def register_handlers(bot_client):
                 "❌ **Invalid Format**\n\n"
                 "`/clone SOURCE_ID DEST_ID`"
             )
+        raise events.StopPropagation
 
     # --- START TRANSFER (UPDATED) ---
     # We need to catch the 'range' step from the message handler
