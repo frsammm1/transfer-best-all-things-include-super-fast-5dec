@@ -13,6 +13,12 @@ from keyboards import (
 from transfer import transfer_process
 import database as db
 from session_manager import session_manager
+from utils import (
+    human_readable_size, time_formatter,
+    get_target_info, apply_filename_manipulations,
+    apply_caption_manipulations, sanitize_filename,
+    extract_link_info
+)
 
 # Login states
 LOGIN_STATES = {} # user_id -> {'state': 'PHONE'|'CODE'|'PWD', 'phone': ...}
@@ -100,10 +106,9 @@ def register_handlers(bot_client):
             "• If you have 2FA, enter your password.\n\n"
 
             "**3. Cloning Files**\n"
-            "• Use `/clone SOURCE_ID DEST_ID`.\n"
-            "• Example: `/clone -100123456789 -100987654321`.\n"
-            "• Configure settings (File Rename, Caption).\n"
-            "• Send the range of message links (e.g., `https://t.me/c/../10 - https://t.me/c/../20`).\n\n"
+            "• Use `/clone`.\n"
+            "• Follow the instructions to set range and destination.\n"
+            "• Configure settings (File Rename, Caption).\n\n"
 
             "**4. Stopping**\n"
             "• Click the `Stop Transfer` button during any operation.\n\n"
@@ -337,7 +342,7 @@ def register_handlers(bot_client):
         await event.respond("👋 **Logged Out**")
         raise events.StopPropagation
 
-    # --- CLONE HANDLER (UPDATED) ---
+    # --- CLONE HANDLER (UPDATED - New Flow) ---
     @bot_client.on(events.NewMessage(pattern='/clone'))
     async def clone_init(event):
         user_id = event.sender_id
@@ -364,48 +369,24 @@ def register_handlers(bot_client):
             )
             raise events.StopPropagation
         
-        try:
-            args = event.text.split()
-            if len(args) < 3:
-                raise ValueError("Need source and destination IDs")
-            
-            source_id = int(args[1])
-            dest_id = int(args[2])
-            
-            if source_id == dest_id:
-                return await event.respond("❌ Source and destination cannot be same!")
-            
-            # Create session metadata
-            session_id = str(uuid.uuid4())
-            config.active_sessions[session_id] = {
-                'source': source_id,
-                'dest': dest_id,
-                'settings': {},
-                'chat_id': event.chat_id,
-                'user_id': user_id, # Track who owns this session
-                'step': 'settings'
-            }
-            
-            await event.respond(
-                f"✅ **Clone Setup**\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"📥 Source: `{source_id}`\n"
-                f"📤 Destination: `{dest_id}`\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n",
-                buttons=get_settings_keyboard(session_id)
-            )
-            
-        except ValueError:
-            await event.respond(
-                "❌ **Invalid Format**\n\n"
-                "`/clone SOURCE_ID DEST_ID`"
-            )
+        # Initialize Session
+        session_id = str(uuid.uuid4())
+        config.active_sessions[session_id] = {
+            'settings': {},
+            'chat_id': event.chat_id,
+            'user_id': user_id,
+            'step': 'wait_start_link'
+        }
+
+        await event.respond(
+            "📍 **Step 1/3: Range Selection**\n\n"
+            "Please send the **Link of the First Message** you want to start cloning from.\n"
+            "Example: `https://t.me/c/12345/100`",
+            buttons=[[Button.inline("❌ Cancel", f"cancel_{session_id}")]]
+        )
         raise events.StopPropagation
 
-    # --- START TRANSFER (UPDATED) ---
-    # We need to catch the 'range' step from the message handler
-    # So we need to update the generic message handler too.
-
+    # --- MESSAGE HANDLER (UPDATED for Sequential Flow) ---
     @bot_client.on(events.NewMessage())
     async def message_handler(event):
         # Ignore if in login flow
@@ -424,61 +405,83 @@ def register_handlers(bot_client):
         
         session = config.active_sessions[session_id]
         step = session.get('step')
-        user_id = event.sender_id
         
-        if step == 'range':
-            if "t.me" not in event.text:
-                return await event.respond("❌ Invalid link format!")
+        # --- NEW FLOW STEPS ---
 
+        if step == 'wait_start_link':
+            link = event.text.strip()
+            source, msg_id = extract_link_info(link)
+
+            if not source:
+                return await event.respond("❌ **Invalid Link**\nPlease send a valid Telegram message link.")
+
+            session['source'] = source
+            session['start_msg'] = msg_id
+            session['step'] = 'wait_end_link'
+
+            await event.respond(
+                f"✅ Start Message: `{msg_id}`\n\n"
+                "📍 **Step 2/3: Range Selection**\n"
+                "Now send the **Link of the Last Message** you want to clone.",
+                buttons=[[Button.inline("❌ Cancel", f"cancel_{session_id}")]]
+            )
+
+        elif step == 'wait_end_link':
+            link = event.text.strip()
+            source, msg_id = extract_link_info(link)
+
+            if not source:
+                 return await event.respond("❌ **Invalid Link**\nPlease send a valid Telegram message link.")
+
+            # Verify source matches
+            if source != session['source']:
+                return await event.respond(
+                    "❌ **Source Mismatch!**\n"
+                    "The start and end links must be from the same channel/group.\n"
+                    "Please send the correct end link."
+                )
+
+            # Ensure order
+            start_msg = session['start_msg']
+            if msg_id < start_msg:
+                # swap if user sent backwards
+                start_msg, msg_id = msg_id, start_msg
+                session['start_msg'] = start_msg
+
+            session['end_msg'] = msg_id
+            session['step'] = 'wait_dest_id'
+
+            await event.respond(
+                f"✅ Range Set: `{start_msg}` to `{msg_id}`\n"
+                f"📂 Source: `{source}`\n\n"
+                "📤 **Step 3/3: Destination**\n"
+                "Please send the **Destination Channel/Group ID** (e.g., `-100xxxx`).\n"
+                "Make sure the User Account is a member/admin there.",
+                buttons=[[Button.inline("❌ Cancel", f"cancel_{session_id}")]]
+            )
+
+        elif step == 'wait_dest_id':
             try:
-                parts = event.text.strip().split("-")
-                if len(parts) != 2:
-                    raise ValueError("Need 2 links separated by -")
+                dest_id = int(event.text.strip())
+                if dest_id == session['source']:
+                     return await event.respond("❌ Destination cannot be same as source!")
 
-                msg1 = int(parts[0].strip().split("/")[-1])
-                msg2 = int(parts[1].strip().split("/")[-1])
+                session['dest'] = dest_id
+                session['step'] = 'settings'
 
-                if msg1 > msg2: msg1, msg2 = msg2, msg1
-
-                # Check Login again before starting
-                _, user_session, _ = await db.check_user(user_id)
-                if not user_session:
-                    return await event.respond("❌ Session lost. Login again.")
-
-                # START TRANSFER
-                # Start User Client dynamically
-                try:
-                    user_client = await session_manager.start_user_session(user_session, user_id)
-
-                    # Only set running flag AFTER successfully getting the lock/session
-                    config.is_running = True
-                    config.stop_flag = False
-
-                    # Get Log Channel
-                    log_channel = await db.get_config("log_channel")
-
-                    config.current_task = asyncio.create_task(
-                        transfer_process(
-                            event,
-                            user_client,
-                            bot_client,
-                            session['source'],
-                            session['dest'],
-                            msg1,
-                            msg2,
-                            session_id,
-                            log_channel=int(log_channel) if log_channel else None
-                        )
-                    )
-                except Exception as e:
-                    # Do not reset config.is_running here, as the error might be "Busy"
-                    # If we set it to False, we might unlock a running process by mistake.
-                    # We only set it to False if WE set it to True.
-                    # But if start_user_session fails, we haven't set it True yet.
-                    await event.respond(f"❌ Failed to start: {e}")
-
-            except Exception as e:
-                await event.respond(f"❌ Error: {e}")
+                # Show Settings Panel
+                await event.respond(
+                    f"✅ **Clone Setup Complete**\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"📥 Source: `{session['source']}`\n"
+                    f"📤 Destination: `{dest_id}`\n"
+                    f"🔢 Range: `{session['start_msg']}` - `{session['end_msg']}`\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"Configure settings or click Start:",
+                    buttons=get_settings_keyboard(session_id)
+                )
+            except ValueError:
+                await event.respond("❌ **Invalid ID**\nPlease send a valid numeric ID (e.g., `-100123456789`).")
 
         # --- SETTINGS HANDLERS (Same as before) ---
         elif step == 'fname_find':
@@ -561,13 +564,43 @@ def register_handlers(bot_client):
     @bot_client.on(events.CallbackQuery(pattern=r'start_(.+)'))
     async def start_cb(event):
         sid = event.data.decode().split('_')[1]
-        if sid in config.active_sessions:
-            config.active_sessions[sid]['step'] = 'range'
-            await event.edit(
-                "📍 **Send Message Range**\n"
-                "Send: `link1 - link2`\n"
-                "Example: `https://t.me/c/xx/10 - https://t.me/c/xx/20`"
+        if sid not in config.active_sessions:
+            return await event.answer("❌ Session expired", alert=True)
+
+        session = config.active_sessions[sid]
+        user_id = session['user_id']
+
+        # Check Login again
+        _, user_session, _ = await db.check_user(user_id)
+        if not user_session:
+            return await event.answer("❌ Session lost. Login again.", alert=True)
+
+        # START TRANSFER
+        try:
+            user_client = await session_manager.start_user_session(user_session, user_id)
+
+            config.is_running = True
+            config.stop_flag = False
+
+            log_channel = await db.get_config("log_channel")
+
+            await event.edit("🚀 **Starting Transfer...**")
+
+            config.current_task = asyncio.create_task(
+                transfer_process(
+                    event,
+                    user_client,
+                    bot_client,
+                    session['source'],
+                    session['dest'],
+                    session['start_msg'],
+                    session['end_msg'],
+                    sid,
+                    log_channel=int(log_channel) if log_channel else None
+                )
             )
+        except Exception as e:
+            await event.edit(f"❌ Failed to start: {e}")
 
     @bot_client.on(events.CallbackQuery(pattern=r'cancel_(.+)'))
     async def cancel_cb(event):

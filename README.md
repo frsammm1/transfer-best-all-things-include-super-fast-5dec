@@ -1,8 +1,14 @@
-# 🚀 Extreme Transfer Bot v3.0
+# 🚀 Extreme Transfer Bot v3.1 (Best UI/UX Update)
 
-The ultimate high-performance Telegram File Transfer Bot, now with a complete **SaaS Platform** architecture.
+The ultimate high-performance Telegram File Transfer Bot, now with an enhanced sequential flow and complete **SaaS Platform** architecture.
 
-## 🔥 New Features in v3.0
+## 🔥 New Features in v3.1
+
+### 🌟 Improved Workflow (Best UI/UX)
+- **Sequential Clone**: Simplified `/clone` command guides you step-by-step.
+- **Range Selection**: Just send the first link and the last link. The bot automatically detects the channel/group.
+- **Auto-Detection**: Supports both Private (`t.me/c/..`) and Public (`t.me/username/..`) links.
+- **Destination Prompt**: Asks for destination ID clearly after range selection.
 
 ### 👑 Admin Panel
 - **User Management**: Grant, revoke, and monitor user access.
@@ -55,7 +61,7 @@ The ultimate high-performance Telegram File Transfer Bot, now with a complete **
 - `/start` - Check status and menu.
 - `/login` - Login to your Telegram account.
 - `/logout` - Logout.
-- `/clone SOURCE_ID DEST_ID` - Start a transfer task.
+- `/clone` - Start a new transfer task (Follow the interactive steps).
 - `/buy` - Request subscription extension.
 
 ### Admin
