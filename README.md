@@ -1,84 +1,65 @@
 # 🚀 Extreme Transfer Bot v3.0
 
-**A High-Performance Telegram File Transfer Bot with Admin Panel & User System.**
+The ultimate high-performance Telegram File Transfer Bot, now with a complete **SaaS Platform** architecture.
 
-Designed for **Render Free Tier (512MB RAM)** with strict resource management.
+## 🔥 New Features in v3.0
+
+### 👑 Admin Panel
+- **User Management**: Grant, revoke, and monitor user access.
+- **Validity System**: Set expiration times for users (e.g., `1h`, `30d`).
+- **Log Channel**: Configure a channel to receive logs of all user activities and transfers.
+- **Commands**:
+  - `/add_user ID DURATION` - Add/Renew user access (e.g., `/add_user 12345 30d`).
+  - `/revoke ID` - Revoke user access immediately.
+  - `/users` - List all active users and their expiration status.
+  - `/set_log CHANNEL_ID` - Set the global log channel.
+
+### 🔐 User Authentication
+- **Secure Login**: Users log in with their own Telegram account via Phone + OTP (and 2FA if enabled).
+- **Session Management**: Users can `/login` and `/logout`. Sessions are stored securely.
+- **Privacy**: The bot uses the user's account *only* for transfers requested by them.
+
+### 💳 Subscription System
+- **Paid Access Only**: New users see a locked interface.
+- **Request Access**: Users can send `/buy` to request a subscription from the admin.
+- **Validity Tracking**: Automatic expiration of access.
+
+### ⚡ Core Optimization
+- **Sequential Processing**: Ensures stability and prevents 512MB RAM overload.
+- **Dynamic Resource Locking**: Manages active sessions to prevent crashes.
+- **Smart Split & Rename**: Handles 2GB+ files automatically.
 
 ---
 
-## 🔥 Features
-
-*   **⚡ Extreme Speed:** Optimized `uvloop` & `asyncio` for maximum throughput.
-*   **👥 Multi-User System:** Sell access to other users with validity periods (e.g., 30 days).
-*   **👑 Admin Panel:** Manage users, revoke access, and monitor logs.
-*   **🔐 Secure Login:** Users login via Phone Number + OTP (no API ID/Hash needed for them).
-*   **📝 Log Channel:** Auto-logs transferred files to your channel (Zero Bandwidth Cost).
-*   **🛡️ RAM Optimized:** Global Queue system ensures only **one** transfer runs at a time to prevent crashes.
-*   **✂️ Smart Splitting:** Automatically splits files > 1.9GB.
-*   **✏️ Manipulation:** Rename files, replace captions, and add custom text.
-
----
-
-## 🛠️ Deployment
+## 🛠 Deployment
 
 ### 1. Variables
-Set these Environment Variables in your deployment (Render/Heroku/VPS):
-
 | Variable | Description |
 | :--- | :--- |
-| `API_ID` | Your App API ID (from my.telegram.org) |
-| `API_HASH` | Your App API Hash |
+| `API_ID` | Your Telegram API ID |
+| `API_HASH` | Your Telegram API Hash |
 | `BOT_TOKEN` | Bot Token from @BotFather |
-| `ADMIN_ID` | **Your Telegram User ID** (to access Admin Panel) |
+| `ADMIN_ID` | Your Telegram User ID (Controller) |
+| `PORT` | Web server port (Default: 8080) |
 
-### 2. Deploy on Render
-1.  Fork this repo.
-2.  Create a **Web Service** on Render.
-3.  Connect your repo.
-4.  Runtime: **Python 3**.
-5.  Build Command: `pip install -r requirements.txt`
-6.  Start Command: `python3 main.py`
-7.  Add the **Environment Variables**.
+### 2. Deploy
+1. Clone the repository.
+2. Install dependencies: `pip install -r requirements.txt`.
+3. Run: `python3 main.py`.
 
 ---
 
 ## 🤖 Commands
 
-### 👑 Admin Commands (You Only)
-*   `/add_user <id> <duration>` - Grant access (e.g., `/add_user 123456789 30d`)
-    *   Durations: `m` (minutes), `h` (hours), `d` (days)
-*   `/revoke <id>` - Revoke user access immediately.
-*   `/users` - List all active subscribers.
-*   `/set_log <channel_id>` - Set the channel for file logs.
+### User
+- `/start` - Check status and menu.
+- `/login` - Login to your Telegram account.
+- `/logout` - Logout.
+- `/clone SOURCE_ID DEST_ID` - Start a transfer task.
+- `/buy` - Request subscription extension.
 
-### 👤 User Commands
-*   `/start` - Check status.
-*   `/login` - Login with Phone Number.
-*   `/logout` - Disconnect session.
-*   `/buy` - Request subscription from Admin.
-*   `/clone <source> <dest>` - Start Transfer.
-*   `/help` - Usage guide.
-
----
-
-## ⚠️ Important Notes
-
-1.  **Global Queue:** Only **one person** can transfer at a time. If someone else is transferring, others must wait. This is to protect the server from crashing (512MB RAM limit).
-2.  **Database:** On Render Free Tier, the database (user list) **resets** every time the bot redeploys/restarts.
-3.  **Privacy:** User session strings are stored locally in `bot_data.db`.
-
----
-
-## 📝 How to Transfer (User Guide)
-
-1.  **Login:** Send `/login` and follow instructions.
-2.  **Setup:** Send `/clone source_id dest_id`.
-    *   Example: `/clone -100123456 -100987654`
-3.  **Configure:** Use buttons to rename files or change captions (optional).
-4.  **Send Range:** Send the link of the first and last message.
-    *   Example: `https://t.me/c/xxx/10 - https://t.me/c/xxx/20`
-5.  **Relax:** The bot will transfer everything sequentially.
-
----
-
-**Version:** 3.0 | **License:** MIT
+### Admin
+- `/add_user <id> <duration>`
+- `/revoke <id>`
+- `/users`
+- `/set_log <channel_id>`

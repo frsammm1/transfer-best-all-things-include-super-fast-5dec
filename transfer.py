@@ -93,6 +93,20 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
                         modified_text = apply_caption_manipulations(message.text, settings)
                         sent_message = await bot_client.send_message(dest_id, modified_text)
                         total_success += 1
+
+                        # LOGGING (Text)
+                        if log_channel:
+                            try:
+                                await bot_client.send_message(
+                                    log_channel,
+                                    f"📝 **Transfer Log**\n"
+                                    f"👤 User: `{session_id}` (Internal)\n"
+                                    f"📤 To: `{dest_id}`\n\n"
+                                    f"📜 Message:\n{modified_text[:100]}..."
+                                )
+                            except Exception as log_e:
+                                config.logger.error(f"Failed to log text: {log_e}")
+
                     total_processed += 1
                     continue
 
@@ -209,10 +223,16 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
                                 # Log to channel (Instant Forward)
                                 if log_channel and sent_part:
                                     try:
-                                        await bot_client.send_file(
+                                        # Use forward_messages to avoid access hash issues
+                                        await bot_client.forward_messages(
                                             log_channel,
-                                            file=sent_part.media,
-                                            caption=f"📝 **Log: Part {part_num}**\nTo: `{dest_id}`\n\n{part_caption}"
+                                            sent_part,
+                                            from_peer=dest_id
+                                        )
+                                        # Add context message
+                                        await bot_client.send_message(
+                                            log_channel,
+                                            f"📝 **Log: Part {part_num}**\nTo: `{dest_id}`\nAbove file forwarded."
                                         )
                                     except Exception as log_e:
                                         config.logger.error(f"Log Error: {log_e}")
@@ -286,10 +306,15 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
                 # LOGGING TO CHANNEL
                 if log_channel and sent_message and uploaded:
                     try:
-                        await bot_client.send_file(
+                        # Use forward_messages to avoid access hash issues
+                        await bot_client.forward_messages(
                             log_channel,
-                            file=sent_message.media,
-                            caption=f"📝 **Transfer Log**\n"
+                            sent_message,
+                            from_peer=dest_id
+                        )
+                        await bot_client.send_message(
+                            log_channel,
+                            f"📝 **Transfer Log**\n"
                             f"👤 User: `{session_id}` (Internal)\n"
                             f"📂 File: `{file_name}`\n"
                             f"📤 To: `{dest_id}`"
