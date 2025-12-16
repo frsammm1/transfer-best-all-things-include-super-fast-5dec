@@ -10,14 +10,14 @@ ADMIN_ID = int(os.environ.get("ADMIN_ID", 0)) # Owner ID
 PORT = int(os.environ.get("PORT", 8080))
 
 # --- OPTIMIZED SETTINGS FOR RENDER FREE TIER ---
-# Reduced from 8MB to 1MB chunks (better for smoothness/speed on free tier)
-CHUNK_SIZE = 1024 * 1024  # 1MB chunks
-QUEUE_SIZE = 80  # 80MB buffer (1MB × 80) - Much safer for free tier
-UPLOAD_PART_SIZE = 8192  # 8MB upload parts (was 32MB)
+# Increased chunk size for speed, reduced queue size to maintain memory safety
+CHUNK_SIZE = 4 * 1024 * 1024  # 4MB chunks (Better speed)
+QUEUE_SIZE = 20  # 4MB * 20 = 80MB buffer (Same memory footprint as before, but less overhead)
+UPLOAD_PART_SIZE = 16 * 1024 * 1024  # 16MB upload parts (Faster uploads)
 UPDATE_INTERVAL = 5  # Progress update interval (seconds)
-MAX_RETRIES = 3  # Retry attempts per file (reduced from 4)
+MAX_RETRIES = 3  # Retry attempts per file
 FLOOD_SLEEP_THRESHOLD = 120
-REQUEST_RETRIES = 10  # Reduced from 20
+REQUEST_RETRIES = 10
 
 # --- LOGGING SETUP ---
 logging.basicConfig(
@@ -27,8 +27,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- RUNTIME STATE ---
-# active_sessions stores metadata about the transfer (settings, steps, etc)
-# It does NOT store the client anymore
 active_sessions = {}
 is_running = False
 status_message = None

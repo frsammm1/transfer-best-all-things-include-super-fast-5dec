@@ -62,7 +62,8 @@ def register_handlers(bot_client):
                 f"**Actions:**\n"
                 f"1. `/login` - Connect Telegram Account\n"
                 f"2. `/clone` - Start Transfer\n"
-                f"3. `/buy` - Extend Validity",
+                f"3. `/buy` - Extend Validity\n"
+                f"4. `/help` - Tutorial",
                 buttons=get_clone_info_keyboard()
             )
 
@@ -79,6 +80,36 @@ def register_handlers(bot_client):
                 "✅ Smart Split & Rename\n\n"
                 "👉 Send `/buy` to request access."
             )
+        raise events.StopPropagation
+
+    # --- HELP HANDLER ---
+    @bot_client.on(events.NewMessage(pattern='/help'))
+    async def help_handler(event):
+        await event.respond(
+            "📚 **User Guide**\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "**1. Getting Started**\n"
+            "• Send `/buy` to request access from the admin.\n"
+            "• Wait for approval message.\n\n"
+
+            "**2. Connecting Account (Important!)**\n"
+            "• Send `/login`.\n"
+            "• Enter your phone number (e.g., `+1234567890`).\n"
+            "• Enter the code sent to your Telegram.\n"
+            "⚠️ **Format:** You MUST enter the code as `1-2-3-4-5` (with dashes).\n"
+            "• If you have 2FA, enter your password.\n\n"
+
+            "**3. Cloning Files**\n"
+            "• Use `/clone SOURCE_ID DEST_ID`.\n"
+            "• Example: `/clone -100123456789 -100987654321`.\n"
+            "• Configure settings (File Rename, Caption).\n"
+            "• Send the range of message links (e.g., `https://t.me/c/../10 - https://t.me/c/../20`).\n\n"
+
+            "**4. Stopping**\n"
+            "• Click the `Stop Transfer` button during any operation.\n\n"
+
+            "**Need Help?** Contact the admin."
+        )
         raise events.StopPropagation
 
     # --- BUY HANDLER ---
@@ -228,7 +259,8 @@ def register_handlers(bot_client):
                     await event.respond(
                         "📩 **Login Step 2/3**\n\n"
                         "Enter the 5-digit code you received from Telegram.\n"
-                        "Format: `1-2-3-4-5` or just `12345`"
+                        "⚠️ **IMPORTANT:** Use the format `1-2-3-4-5` (with dashes).\n"
+                        "Do not send `12345`."
                     )
                 except Exception as e:
                     await session_manager.remove_temp_client(user_id)
@@ -242,7 +274,10 @@ def register_handlers(bot_client):
                     return await event.respond("❌ Session timed out. Use `/login` again.")
 
                 phone = state_data['phone']
-                code = text.replace('-', '').replace(' ', '')
+
+                # IMPORTANT: User requested NO STRIPPING of dashes.
+                # If user sends "1-2-3-4-5", we send "1-2-3-4-5" to Telethon.
+                code = text
 
                 try:
                     await client.sign_in(phone, code)
@@ -266,7 +301,7 @@ def register_handlers(bot_client):
                         "Please enter your **Password**:"
                     )
                 except Exception as e:
-                    await event.respond(f"❌ Login Failed: {e}")
+                    await event.respond(f"❌ Login Failed: {e}\nDid you use the `1-2-3-4-5` format?")
 
             elif step == 'PWD':
                 client = await session_manager.get_temp_client(user_id)

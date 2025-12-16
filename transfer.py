@@ -29,7 +29,7 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
     status_message = await event.respond(
         f"🚀 **Starting Transfer...**\n"
         f"⚡ Optimized for Render Free Tier\n"
-        f"💾 Buffer: 16MB (8MB × 2)\n"
+        f"💾 Chunk Size: {human_readable_size(config.CHUNK_SIZE)}\n"
         f"📍 Source: `{source_id}` → Dest: `{dest_id}`",
         buttons=get_progress_keyboard()
     )
@@ -181,6 +181,8 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
                     # We will log each part.
 
                     for i in range(parts):
+                        if config.stop_flag: break # Stop inside loop
+
                         part_num = i + 1
                         part_name = f"{file_name}.part{part_num:03d}"
                         part_caption = f"{modified_caption}\n\n(Part {part_num}/{parts})"
@@ -206,6 +208,7 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
                         retry_count = 0
                         uploaded = False
                         while retry_count < config.MAX_RETRIES and not uploaded:
+                            if config.stop_flag: break # Stop inside retry loop
                             try:
                                 sent_part = await bot_client.send_file(
                                     dest_id,
@@ -246,7 +249,7 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
                                 await asyncio.sleep(2)
                                 retry_count += 1
 
-                        if not uploaded:
+                        if not uploaded and not config.stop_flag:
                             raise Exception(f"Failed to upload part {part_num}")
 
                 else:
@@ -263,6 +266,7 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
                     uploaded = False
 
                     while retry_count < config.MAX_RETRIES and not uploaded:
+                        if config.stop_flag: break # Stop inside retry loop
                         try:
                             sent_message = await bot_client.send_file(
                                 dest_id,
