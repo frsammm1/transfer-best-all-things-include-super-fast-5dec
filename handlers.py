@@ -1,64 +1,318 @@
 import asyncio
 import uuid
-from telethon import events
+import time
+from telethon import events, Button, errors
+from telethon.tl.types import User
 import config
 from keyboards import (
     get_settings_keyboard, get_confirm_keyboard,
-    get_skip_keyboard, get_clone_info_keyboard
+    get_skip_keyboard, get_clone_info_keyboard,
+    get_progress_keyboard
 )
 from transfer import transfer_process
+import database as db
+from session_manager import session_manager
 
-def register_handlers(user_client, bot_client):
-    """Register all bot handlers - FIXED VERSION"""
+# Login states
+LOGIN_STATES = {} # user_id -> {'state': 'PHONE'|'CODE'|'PWD', 'phone': ...}
+
+def register_handlers(bot_client):
+    """Register all bot handlers"""
     
+    # --- AUTH HELPERS ---
+    async def get_user_status(user_id):
+        if user_id == config.ADMIN_ID:
+            return "ADMIN"
+        is_valid, _, _ = await db.check_user(user_id)
+        return "PAID" if is_valid else "FREE"
+
+    # --- START HANDLER ---
     @bot_client.on(events.NewMessage(pattern='/start'))
     async def start_handler(event):
+        user_id = event.sender_id
+        status = await get_user_status(user_id)
+
+        # Admin View
+        if status == "ADMIN":
+            await event.respond(
+                "👑 **Admin Panel**\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "Commands:\n"
+                "`/add_user ID DURATION` (e.g., 1h, 30d)\n"
+                "`/revoke ID`\n"
+                "`/users` - List users\n"
+                "`/set_log CHANNEL_ID`\n"
+                "`/login` - Login to your account\n"
+                "`/clone` - Start transfer"
+            )
+            return
+
+        # Paid User View
+        if status == "PAID":
+            is_valid, session, _ = await db.check_user(user_id)
+            login_status = "✅ Logged In" if session else "❌ Not Logged In"
+
+            await event.respond(
+                f"🚀 **File Transfer Bot**\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"👤 Status: **Premium Member**\n"
+                f"🔑 Session: **{login_status}**\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"**Actions:**\n"
+                f"1. `/login` - Connect Telegram Account\n"
+                f"2. `/clone` - Start Transfer\n"
+                f"3. `/buy` - Extend Validity",
+                buttons=get_clone_info_keyboard()
+            )
+
+        # Free/New User View
+        else:
+            await event.respond(
+                "👋 **Welcome to Extreme Transfer Bot**\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "⚠️ **Access Restricted**\n"
+                "You need to purchase a subscription to use this bot.\n\n"
+                "**Features:**\n"
+                "✅ Unlimited Transfers\n"
+                "✅ 2GB+ File Support\n"
+                "✅ Smart Split & Rename\n\n"
+                "👉 Send `/buy` to request access."
+            )
+
+    # --- BUY HANDLER ---
+    @bot_client.on(events.NewMessage(pattern='/buy'))
+    async def buy_handler(event):
+        user_id = event.sender_id
+        user = await event.get_sender()
+        username = f"@{user.username}" if user.username else f"User {user_id}"
+
         await event.respond(
-            "🚀 **File Transfer Bot v2.0**\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            f"⚡ Optimized for Free Tier\n"
-            f"💾 Buffer: 16MB (8MB × 2)\n"
-            f"🔥 Safe & Reliable\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "**Features:**\n"
-            "✅ All file types support\n"
-            "✅ Video → MP4 conversion\n"
-            "✅ Filename manipulation\n"
-            "✅ Caption manipulation\n\n"
-            "**Commands:**\n"
-            "`/clone SOURCE_ID DEST_ID` - Start transfer\n"
-            "`/stats` - Bot statistics\n"
-            "`/help` - Usage guide\n"
-            "`/stop` - Stop transfer",
-            buttons=get_clone_info_keyboard()
+            "⏳ **Request Sent!**\n\n"
+            "The admin has been notified. You will receive a message once approved."
         )
-    
-    @bot_client.on(events.NewMessage(pattern='/help'))
-    async def help_handler(event):
+
+        # Notify Admin
+        try:
+            await bot_client.send_message(
+                config.ADMIN_ID,
+                f"💸 **New Purchase Request**\n"
+                f"User: {username} (`{user_id}`)\n"
+                f"Action: Wants to buy/extend subscription.\n\n"
+                f"Grant: `/add_user {user_id} 30d`"
+            )
+        except Exception as e:
+            config.logger.error(f"Failed to notify admin: {e}")
+
+    # --- ADMIN COMMANDS ---
+    @bot_client.on(events.NewMessage(pattern=r'/add_user (\d+) (.+)'))
+    async def add_user_handler(event):
+        if event.sender_id != config.ADMIN_ID: return
+
+        try:
+            target_id = int(event.pattern_match.group(1))
+            duration_str = event.pattern_match.group(2).lower()
+
+            multiplier = 1
+            if duration_str.endswith('m'): multiplier = 60
+            elif duration_str.endswith('h'): multiplier = 3600
+            elif duration_str.endswith('d'): multiplier = 86400
+
+            duration = int(duration_str[:-1]) * multiplier
+
+            new_expiry = await db.update_validity(target_id, duration)
+            expiry_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(new_expiry))
+
+            await event.respond(f"✅ User `{target_id}` updated!\nExpires: `{expiry_date}`")
+
+            # Notify User
+            try:
+                await bot_client.send_message(
+                    target_id,
+                    f"🎉 **Subscription Activated!**\n\n"
+                    f"You have been granted access until:\n`{expiry_date}`\n\n"
+                    f"👉 Use `/login` to connect your account."
+                )
+            except:
+                await event.respond(f"⚠️ Could not DM user `{target_id}`")
+
+        except Exception as e:
+            await event.respond(f"❌ Error: {e}")
+
+    @bot_client.on(events.NewMessage(pattern=r'/revoke (\d+)'))
+    async def revoke_user_handler(event):
+        if event.sender_id != config.ADMIN_ID: return
+
+        target_id = int(event.pattern_match.group(1))
+        await db.revoke_user(target_id)
+        await event.respond(f"🚫 User `{target_id}` revoked.")
+
+    @bot_client.on(events.NewMessage(pattern='/users'))
+    async def list_users_handler(event):
+        if event.sender_id != config.ADMIN_ID: return
+
+        users = await db.get_all_users()
+        if not users:
+            return await event.respond("No users found.")
+
+        msg = "👥 **User List**\n━━━━━━━━━━━━━━━━\n"
+        for uid, expiry, phone in users:
+            remaining = int((expiry - time.time()) / 3600)
+            status = f"{remaining}h left" if remaining > 0 else "EXPIRED"
+            msg += f"🆔 `{uid}` | 📱 `{phone}` | ⏳ {status}\n"
+
+        await event.respond(msg)
+
+    @bot_client.on(events.NewMessage(pattern=r'/set_log (-?\d+)'))
+    async def set_log_handler(event):
+        if event.sender_id != config.ADMIN_ID: return
+
+        log_id = event.pattern_match.group(1)
+        await db.set_config("log_channel", log_id)
+        await event.respond(f"✅ Log channel set to `{log_id}`")
+
+    # --- LOGIN SYSTEM ---
+    @bot_client.on(events.NewMessage(pattern='/login'))
+    async def login_start(event):
+        user_id = event.sender_id
+
+        # Check validity (Admin always valid)
+        if user_id != config.ADMIN_ID:
+            is_valid, _, _ = await db.check_user(user_id)
+            if not is_valid:
+                return await event.respond("❌ **Subscription Required**\nUse `/buy` first.")
+
+        # Check if already logged in
+        is_valid, session, _ = await db.check_user(user_id)
+        if session:
+            return await event.respond(
+                "✅ **Already Logged In!**\n"
+                "Use `/logout` to change account."
+            )
+
+        LOGIN_STATES[user_id] = {'state': 'PHONE'}
         await event.respond(
-            "📚 **User Guide**\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "**Step 1:** Use `/clone` command\n"
-            "`/clone -1001234567 -1009876543`\n\n"
-            "**Step 2:** Configure (optional)\n"
-            "• Filename Find & Replace\n"
-            "• Caption Find & Replace\n"
-            "• Add Extra Caption\n\n"
-            "**Step 3:** Click '✅ Done'\n\n"
-            "**Step 4:** Send message range\n"
-            "`https://t.me/c/xxx/10 - https://t.me/c/xxx/20`\n\n"
-            "**Tips:**\n"
-            "• Get IDs using @userinfobot\n"
-            "• Bot must be admin in destination\n"
-            "• Use `/stop` to cancel transfer"
+            "🔐 **Login Step 1/3**\n\n"
+            "Please send your **Phone Number** in international format.\n"
+            "Example: `+1234567890`"
         )
-    
+
+    @bot_client.on(events.NewMessage())
+    async def login_conversation(event):
+        user_id = event.sender_id
+        if user_id not in LOGIN_STATES:
+            return # Not in login flow (allow other handlers to pick up)
+
+        state_data = LOGIN_STATES[user_id]
+        step = state_data['state']
+        text = event.text.strip()
+
+        try:
+            if step == 'PHONE':
+                await event.respond("⏳ **Sending Code...**\nPlease wait...")
+                client = await session_manager.create_temp_client(user_id)
+
+                try:
+                    await client.send_code_request(text)
+                    state_data['phone'] = text
+                    state_data['state'] = 'CODE'
+                    await event.respond(
+                        "📩 **Login Step 2/3**\n\n"
+                        "Enter the 5-digit code you received from Telegram.\n"
+                        "Format: `1-2-3-4-5` or just `12345`"
+                    )
+                except Exception as e:
+                    await session_manager.remove_temp_client(user_id)
+                    del LOGIN_STATES[user_id]
+                    await event.respond(f"❌ Error: {e}\nTry `/login` again.")
+
+            elif step == 'CODE':
+                client = await session_manager.get_temp_client(user_id)
+                if not client:
+                    del LOGIN_STATES[user_id]
+                    return await event.respond("❌ Session timed out. Use `/login` again.")
+
+                phone = state_data['phone']
+                code = text.replace('-', '').replace(' ', '')
+
+                try:
+                    await client.sign_in(phone, code)
+                    # Login Success!
+                    string_session = client.session.save()
+                    await db.update_user_session(user_id, string_session, phone)
+
+                    await session_manager.remove_temp_client(user_id)
+                    del LOGIN_STATES[user_id]
+
+                    await event.respond(
+                        "✅ **Login Successful!**\n"
+                        "You can now use `/clone` to transfer files."
+                    )
+
+                except errors.SessionPasswordNeededError:
+                    state_data['state'] = 'PWD'
+                    await event.respond(
+                        "🔐 **Login Step 3/3**\n\n"
+                        "Two-Step Verification is enabled.\n"
+                        "Please enter your **Password**:"
+                    )
+                except Exception as e:
+                    await event.respond(f"❌ Login Failed: {e}")
+
+            elif step == 'PWD':
+                client = await session_manager.get_temp_client(user_id)
+                password = text
+
+                try:
+                    await client.sign_in(password=password)
+                    string_session = client.session.save()
+                    phone = state_data['phone']
+                    await db.update_user_session(user_id, string_session, phone)
+
+                    await session_manager.remove_temp_client(user_id)
+                    del LOGIN_STATES[user_id]
+
+                    await event.respond("✅ **Login Successful!**")
+                except Exception as e:
+                    await event.respond(f"❌ Password Error: {e}")
+
+        except Exception as e:
+            config.logger.error(f"Login Handler Error: {e}")
+            await event.respond("❌ An error occurred.")
+            if user_id in LOGIN_STATES:
+                del LOGIN_STATES[user_id]
+            await session_manager.remove_temp_client(user_id)
+
+        # Stop propagation for login messages
+        raise events.StopPropagation
+
+    @bot_client.on(events.NewMessage(pattern='/logout'))
+    async def logout_handler(event):
+        user_id = event.sender_id
+        await db.update_user_session(user_id, None, None)
+        await event.respond("👋 **Logged Out**")
+
+    # --- CLONE HANDLER (UPDATED) ---
     @bot_client.on(events.NewMessage(pattern='/clone'))
     async def clone_init(event):
+        user_id = event.sender_id
+
+        # 1. Check Validity
+        if user_id != config.ADMIN_ID:
+            is_valid, _, _ = await db.check_user(user_id)
+            if not is_valid:
+                return await event.respond("❌ Subscription Expired/Missing. Use `/buy`.")
+
+        # 2. Check Login
+        is_valid, session, _ = await db.check_user(user_id)
+        if not session:
+            return await event.respond("❌ Not Logged In. Use `/login` first.")
+
+        # 3. Check if busy
         if config.is_running: 
             return await event.respond(
-                "⚠️ **Transfer in progress!**\n"
-                "Use `/stop` to cancel it first."
+                "⚠️ **Bot is Busy!**\n"
+                "Someone is currently running a transfer.\n"
+                "Please wait for them to finish."
             )
         
         try:
@@ -69,17 +323,17 @@ def register_handlers(user_client, bot_client):
             source_id = int(args[1])
             dest_id = int(args[2])
             
-            # Validate IDs
             if source_id == dest_id:
                 return await event.respond("❌ Source and destination cannot be same!")
             
-            # Create session
+            # Create session metadata
             session_id = str(uuid.uuid4())
             config.active_sessions[session_id] = {
                 'source': source_id,
                 'dest': dest_id,
                 'settings': {},
                 'chat_id': event.chat_id,
+                'user_id': user_id, # Track who owns this session
                 'step': 'settings'
             }
             
@@ -88,210 +342,26 @@ def register_handlers(user_client, bot_client):
                 f"━━━━━━━━━━━━━━━━━━━━\n"
                 f"📥 Source: `{source_id}`\n"
                 f"📤 Destination: `{dest_id}`\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"Configure your settings below:\n"
-                f"(All optional - click Done to skip)",
+                f"━━━━━━━━━━━━━━━━━━━━\n",
                 buttons=get_settings_keyboard(session_id)
             )
             
         except ValueError:
             await event.respond(
                 "❌ **Invalid Format**\n\n"
-                "**Usage:**\n"
-                "`/clone SOURCE_ID DEST_ID`\n\n"
-                "**Example:**\n"
-                "`/clone -1001234567890 -1009876543210`\n\n"
-                "💡 Get IDs: @userinfobot"
+                "`/clone SOURCE_ID DEST_ID`"
             )
-    
-    @bot_client.on(events.CallbackQuery(pattern=b'clone_help'))
-    async def clone_help_callback(event):
-        await event.answer()
-        await event.respond(
-            "📖 **Clone Command Guide**\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "**Step 1:** Get IDs\n"
-            "Forward any message from source/dest to @userinfobot\n\n"
-            "**Step 2:** Run command\n"
-            "`/clone -1001234 -1009876`\n\n"
-            "**Step 3:** Configure (optional)\n"
-            "Set filename/caption changes\n\n"
-            "**Step 4:** Click 'Done'\n\n"
-            "**Step 5:** Send range\n"
-            "Two message links with '-' between\n\n"
-            "That's it! Transfer starts automatically."
-        )
-    
-    @bot_client.on(events.CallbackQuery(pattern=b'bot_stats'))
-    async def stats_callback(event):
-        await event.answer()
-        await event.respond(
-            f"📊 **Bot Statistics**\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"⚡ Chunk Size: **8MB**\n"
-            f"💾 Queue: **2 chunks**\n"
-            f"📦 Buffer: **16MB**\n"
-            f"📤 Upload Parts: **8MB**\n"
-            f"🔄 Max Retries: **{config.MAX_RETRIES}**\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🚀 Status: **{'🟢 Running' if config.is_running else '🔴 Idle'}**\n"
-            f"📊 Sessions: **{len(config.active_sessions)}**"
-        )
-    
-    @bot_client.on(events.CallbackQuery(pattern=r'set_fname_(.+)'))
-    async def set_filename_callback(event):
-        session_id = event.data.decode().split('_')[2]
-        if session_id not in config.active_sessions:
-            return await event.answer("❌ Session expired! Start over with /clone", alert=True)
-        
-        config.active_sessions[session_id]['step'] = 'fname_find'
-        await event.edit(
-            "📝 **Filename: Find Text**\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "Type the text to FIND in filenames:\n\n"
-            "Example: `S01E` or `720p`\n\n"
-            "(Or click Skip)",
-            buttons=get_skip_keyboard(session_id)
-        )
-    
-    @bot_client.on(events.CallbackQuery(pattern=r'set_fcap_(.+)'))
-    async def set_caption_find_callback(event):
-        session_id = event.data.decode().split('_')[2]
-        if session_id not in config.active_sessions:
-            return await event.answer("❌ Session expired! Start over", alert=True)
-        
-        config.active_sessions[session_id]['step'] = 'cap_find'
-        await event.edit(
-            "💬 **Caption: Find Text**\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "Type the text to FIND in captions:\n\n"
-            "Example: `@OldChannel`\n\n"
-            "(Or click Skip)",
-            buttons=get_skip_keyboard(session_id)
-        )
-    
-    @bot_client.on(events.CallbackQuery(pattern=r'set_xcap_(.+)'))
-    async def set_extra_caption_callback(event):
-        session_id = event.data.decode().split('_')[2]
-        if session_id not in config.active_sessions:
-            return await event.answer("❌ Session expired!", alert=True)
-        
-        config.active_sessions[session_id]['step'] = 'extra_cap'
-        await event.edit(
-            "➕ **Extra Caption**\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "Type text to ADD at caption end:\n\n"
-            "Example: `Join @MyChannel`\n\n"
-            "(Or click Skip)",
-            buttons=get_skip_keyboard(session_id)
-        )
-    
-    @bot_client.on(events.CallbackQuery(pattern=r'skip_(.+)'))
-    async def skip_callback(event):
-        session_id = event.data.decode().split('_')[1]
-        if session_id not in config.active_sessions:
-            return await event.answer("❌ Session expired!", alert=True)
-        
-        config.active_sessions[session_id]['step'] = 'settings'
-        await event.answer("⏭️ Skipped!")
-        await event.edit(
-            "✅ **Settings Menu**\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "Configure your transfer:",
-            buttons=get_settings_keyboard(session_id)
-        )
-    
-    @bot_client.on(events.CallbackQuery(pattern=r'confirm_(.+)'))
-    async def confirm_callback(event):
-        session_id = event.data.decode().split('_')[1]
-        if session_id not in config.active_sessions:
-            return await event.answer("❌ Session expired!", alert=True)
-        
-        settings = config.active_sessions[session_id]['settings']
-        settings_text, keyboard = get_confirm_keyboard(session_id, settings)
-        
-        await event.edit(
-            f"🔍 **Review Your Settings**\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"{settings_text}"
-            f"Ready to proceed?",
-            buttons=keyboard
-        )
-    
-    @bot_client.on(events.CallbackQuery(pattern=r'back_(.+)'))
-    async def back_callback(event):
-        session_id = event.data.decode().split('_')[1]
-        if session_id not in config.active_sessions:
-            return await event.answer("❌ Session expired!", alert=True)
-        
-        config.active_sessions[session_id]['step'] = 'settings'
-        await event.edit(
-            "✅ **Settings Menu**\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "Configure your transfer:",
-            buttons=get_settings_keyboard(session_id)
-        )
-    
-    @bot_client.on(events.CallbackQuery(pattern=r'clear_(.+)'))
-    async def clear_callback(event):
-        session_id = event.data.decode().split('_')[1]
-        if session_id not in config.active_sessions:
-            return await event.answer("❌ Session expired!", alert=True)
-        
-        config.active_sessions[session_id]['settings'] = {}
-        config.active_sessions[session_id]['step'] = 'settings'
-        await event.answer("🗑️ Cleared!")
-        await event.edit(
-            "✅ **Settings Cleared**\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "Configure again or click Done:",
-            buttons=get_settings_keyboard(session_id)
-        )
-    
-    @bot_client.on(events.CallbackQuery(pattern=r'start_(.+)'))
-    async def start_transfer_callback(event):
-        session_id = event.data.decode().split('_')[1]
-        if session_id not in config.active_sessions:
-            return await event.answer("❌ Session expired!", alert=True)
-        
-        config.active_sessions[session_id]['step'] = 'range'
-        await event.edit(
-            "📍 **Send Message Range**\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "Send TWO message links like this:\n"
-            "`link1 - link2`\n\n"
-            "**Example:**\n"
-            "`https://t.me/c/1234/10 - https://t.me/c/1234/20`\n\n"
-            "**How to get links:**\n"
-            "1. Open source channel\n"
-            "2. Right-click on message\n"
-            "3. Copy message link\n"
-            "4. Do this for start & end messages\n"
-            "5. Send both with '-' between them"
-        )
-    
-    @bot_client.on(events.CallbackQuery(pattern=r'cancel_(.+)'))
-    async def cancel_callback(event):
-        session_id = event.data.decode().split('_')[1]
-        if session_id in config.active_sessions:
-            del config.active_sessions[session_id]
-        await event.answer("❌ Cancelled!")
-        await event.edit("❌ **Cancelled**\n\nUse `/clone` to start again.")
-    
-    @bot_client.on(events.CallbackQuery(pattern=b'stop_transfer'))
-    async def stop_transfer_callback(event):
-        if not config.is_running:
-            return await event.answer("No transfer running!", alert=True)
-        
-        config.stop_flag = True
-        config.is_running = False
-        await event.answer("🛑 Stopping...", alert=True)
-        
-        if config.current_task and not config.current_task.done():
-            config.current_task.cancel()
-    
+
+    # --- START TRANSFER (UPDATED) ---
+    # We need to catch the 'range' step from the message handler
+    # So we need to update the generic message handler too.
+
     @bot_client.on(events.NewMessage())
     async def message_handler(event):
+        # Ignore if in login flow
+        if event.sender_id in LOGIN_STATES:
+            return
+
         # Find active session
         session_id = None
         for sid, data in config.active_sessions.items():
@@ -304,126 +374,170 @@ def register_handlers(user_client, bot_client):
         
         session = config.active_sessions[session_id]
         step = session.get('step')
+        user_id = event.sender_id
         
-        # Handle steps
-        if step == 'fname_find':
+        if step == 'range':
+            if "t.me" not in event.text:
+                return await event.respond("❌ Invalid link format!")
+
+            try:
+                parts = event.text.strip().split("-")
+                if len(parts) != 2:
+                    raise ValueError("Need 2 links separated by -")
+
+                msg1 = int(parts[0].strip().split("/")[-1])
+                msg2 = int(parts[1].strip().split("/")[-1])
+
+                if msg1 > msg2: msg1, msg2 = msg2, msg1
+
+                # Check Login again before starting
+                _, user_session, _ = await db.check_user(user_id)
+                if not user_session:
+                    return await event.respond("❌ Session lost. Login again.")
+
+                # START TRANSFER
+                # Start User Client dynamically
+                try:
+                    user_client = await session_manager.start_user_session(user_session, user_id)
+
+                    # Only set running flag AFTER successfully getting the lock/session
+                    config.is_running = True
+                    config.stop_flag = False
+
+                    # Get Log Channel
+                    log_channel = await db.get_config("log_channel")
+
+                    config.current_task = asyncio.create_task(
+                        transfer_process(
+                            event,
+                            user_client,
+                            bot_client,
+                            session['source'],
+                            session['dest'],
+                            msg1,
+                            msg2,
+                            session_id,
+                            log_channel=int(log_channel) if log_channel else None
+                        )
+                    )
+                except Exception as e:
+                    # Do not reset config.is_running here, as the error might be "Busy"
+                    # If we set it to False, we might unlock a running process by mistake.
+                    # We only set it to False if WE set it to True.
+                    # But if start_user_session fails, we haven't set it True yet.
+                    await event.respond(f"❌ Failed to start: {e}")
+
+            except Exception as e:
+                await event.respond(f"❌ Error: {e}")
+
+        # --- SETTINGS HANDLERS (Same as before) ---
+        elif step == 'fname_find':
             session['settings']['find_name'] = event.text.strip()
             session['step'] = 'fname_replace'
-            await event.respond(
-                f"✅ Find: `{event.text.strip()}`\n\n"
-                "Now type REPLACEMENT text:",
-                buttons=get_skip_keyboard(session_id)
-            )
+            await event.respond("Type REPLACEMENT text:", buttons=get_skip_keyboard(session_id))
         
         elif step == 'fname_replace':
             session['settings']['replace_name'] = event.text.strip()
             session['step'] = 'settings'
-            await event.respond(
-                "✅ **Filename rule set!**\n\n"
-                f"Find: `{session['settings']['find_name']}`\n"
-                f"Replace: `{event.text.strip()}`",
-                buttons=get_settings_keyboard(session_id)
-            )
-        
+            await event.respond("✅ Filename rule set!", buttons=get_settings_keyboard(session_id))
+
         elif step == 'cap_find':
             session['settings']['find_cap'] = event.text.strip()
             session['step'] = 'cap_replace'
-            await event.respond(
-                f"✅ Find: `{event.text.strip()}`\n\n"
-                "Now type REPLACEMENT text:",
-                buttons=get_skip_keyboard(session_id)
-            )
-        
+            await event.respond("Type REPLACEMENT text:", buttons=get_skip_keyboard(session_id))
+
         elif step == 'cap_replace':
             session['settings']['replace_cap'] = event.text.strip()
             session['step'] = 'settings'
-            await event.respond(
-                "✅ **Caption rule set!**\n\n"
-                f"Find: `{session['settings']['find_cap']}`\n"
-                f"Replace: `{event.text.strip()}`",
-                buttons=get_settings_keyboard(session_id)
-            )
-        
+            await event.respond("✅ Caption rule set!", buttons=get_settings_keyboard(session_id))
+
         elif step == 'extra_cap':
             session['settings']['extra_cap'] = event.text.strip()
             session['step'] = 'settings'
-            await event.respond(
-                "✅ **Extra caption set!**\n\n"
-                f"Text: `{event.text.strip()[:50]}...`",
-                buttons=get_settings_keyboard(session_id)
+            await event.respond("✅ Extra caption set!", buttons=get_settings_keyboard(session_id))
+
+
+    # --- CALLBACKS (Need to re-register these) ---
+    @bot_client.on(events.CallbackQuery(pattern=r'set_fname_(.+)'))
+    async def set_fname_cb(event):
+        sid = event.data.decode().split('_')[2]
+        if sid in config.active_sessions:
+            config.active_sessions[sid]['step'] = 'fname_find'
+            await event.edit("Type text to FIND in filename:", buttons=get_skip_keyboard(sid))
+
+    @bot_client.on(events.CallbackQuery(pattern=r'set_fcap_(.+)'))
+    async def set_fcap_cb(event):
+        sid = event.data.decode().split('_')[2]
+        if sid in config.active_sessions:
+            config.active_sessions[sid]['step'] = 'cap_find'
+            await event.edit("Type text to FIND in caption:", buttons=get_skip_keyboard(sid))
+
+    @bot_client.on(events.CallbackQuery(pattern=r'set_xcap_(.+)'))
+    async def set_xcap_cb(event):
+        sid = event.data.decode().split('_')[2]
+        if sid in config.active_sessions:
+            config.active_sessions[sid]['step'] = 'extra_cap'
+            await event.edit("Type text to ADD to caption:", buttons=get_skip_keyboard(sid))
+
+    @bot_client.on(events.CallbackQuery(pattern=r'skip_(.+)'))
+    async def skip_cb(event):
+        sid = event.data.decode().split('_')[1]
+        if sid in config.active_sessions:
+            config.active_sessions[sid]['step'] = 'settings'
+            await event.edit("✅ Settings:", buttons=get_settings_keyboard(sid))
+
+    @bot_client.on(events.CallbackQuery(pattern=r'confirm_(.+)'))
+    async def confirm_cb(event):
+        sid = event.data.decode().split('_')[1]
+        if sid in config.active_sessions:
+            st, kb = get_confirm_keyboard(sid, config.active_sessions[sid]['settings'])
+            await event.edit(st, buttons=kb)
+
+    @bot_client.on(events.CallbackQuery(pattern=r'back_(.+)'))
+    async def back_cb(event):
+        sid = event.data.decode().split('_')[1]
+        if sid in config.active_sessions:
+            config.active_sessions[sid]['step'] = 'settings'
+            await event.edit("✅ Settings:", buttons=get_settings_keyboard(sid))
+
+    @bot_client.on(events.CallbackQuery(pattern=r'clear_(.+)'))
+    async def clear_cb(event):
+        sid = event.data.decode().split('_')[1]
+        if sid in config.active_sessions:
+            config.active_sessions[sid]['settings'] = {}
+            config.active_sessions[sid]['step'] = 'settings'
+            await event.edit("🗑️ Settings Cleared", buttons=get_settings_keyboard(sid))
+
+    @bot_client.on(events.CallbackQuery(pattern=r'start_(.+)'))
+    async def start_cb(event):
+        sid = event.data.decode().split('_')[1]
+        if sid in config.active_sessions:
+            config.active_sessions[sid]['step'] = 'range'
+            await event.edit(
+                "📍 **Send Message Range**\n"
+                "Send: `link1 - link2`\n"
+                "Example: `https://t.me/c/xx/10 - https://t.me/c/xx/20`"
             )
-        
-        elif step == 'range':
-            if "t.me" not in event.text:
-                return await event.respond(
-                    "❌ Invalid format!\n\n"
-                    "Send like: `link1 - link2`"
-                )
-            
-            try:
-                parts = event.text.strip().split("-")
-                if len(parts) != 2:
-                    raise ValueError("Need exactly 2 links separated by -")
-                
-                msg1 = int(parts[0].strip().split("/")[-1])
-                msg2 = int(parts[1].strip().split("/")[-1])
-                
-                if msg1 > msg2: 
-                    msg1, msg2 = msg2, msg1
-                
-                if msg1 == msg2:
-                    return await event.respond("❌ Start and end must be different!")
-                
-                # Start transfer
-                config.is_running = True
-                config.stop_flag = False
-                config.current_task = asyncio.create_task(
-                    transfer_process(
-                        event, 
-                        user_client,
-                        bot_client,
-                        session['source'], 
-                        session['dest'], 
-                        msg1, 
-                        msg2,
-                        session_id
-                    )
-                )
-                
-            except Exception as e: 
-                config.logger.error(f"Range parse error: {e}")
-                await event.respond(
-                    f"❌ **Invalid Format**\n\n"
-                    f"Expected:\n"
-                    f"`https://t.me/c/xxx/10 - https://t.me/c/xxx/20`\n\n"
-                    f"Error: `{str(e)}`"
-                )
-    
-    @bot_client.on(events.NewMessage(pattern='/stats'))
-    async def stats_handler(event):
-        await event.respond(
-            f"📊 **Bot Statistics**\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"⚡ Chunk: **8MB**\n"
-            f"💾 Buffer: **16MB** (8MB × 2)\n"
-            f"📤 Upload: **8MB parts**\n"
-            f"🔄 Retries: **{config.MAX_RETRIES}**\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"Status: **{'🟢 Running' if config.is_running else '🔴 Idle'}**\n"
-            f"Sessions: **{len(config.active_sessions)}**"
-        )
-    
-    @bot_client.on(events.NewMessage(pattern='/stop'))
-    async def stop_handler(event):
-        if not config.is_running:
-            return await event.respond("⚠️ No transfer to stop!")
-        
-        config.stop_flag = True
-        config.is_running = False
-        
-        if config.current_task and not config.current_task.done():
-            config.current_task.cancel()
-        
-        await event.respond("🛑 **Stopping...**\n\nPlease wait...")
-    
-    config.logger.info("✅ All handlers registered!")
+
+    @bot_client.on(events.CallbackQuery(pattern=r'cancel_(.+)'))
+    async def cancel_cb(event):
+        sid = event.data.decode().split('_')[1]
+        if sid in config.active_sessions:
+            del config.active_sessions[sid]
+        await event.edit("❌ Cancelled")
+
+    @bot_client.on(events.CallbackQuery(pattern=b'stop_transfer'))
+    async def stop_cb(event):
+        if config.is_running:
+            config.stop_flag = True
+            await event.answer("🛑 Stopping...", alert=True)
+
+    @bot_client.on(events.CallbackQuery(pattern=b'clone_help'))
+    async def help_cb(event):
+        await event.answer("Check /help for details", alert=True)
+
+    @bot_client.on(events.CallbackQuery(pattern=b'bot_stats'))
+    async def stats_cb(event):
+        await event.answer("Running in Extreme Mode", alert=True)
+
+    config.logger.info("✅ Handlers Registered")

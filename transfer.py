@@ -16,11 +16,12 @@ from utils import (
 )
 from stream import ExtremeBufferedStream, SplitFile
 from keyboards import get_progress_keyboard
+from session_manager import session_manager
 
 # Constants
 SPLIT_THRESHOLD = 1.9 * 1024 * 1024 * 1024 # 1.9 GB safely
 
-async def transfer_process(event, user_client, bot_client, source_id, dest_id, start_msg, end_msg, session_id):
+async def transfer_process(event, user_client, bot_client, source_id, dest_id, start_msg, end_msg, session_id, log_channel=None):
     """Main transfer process with all features - FIXED VERSION"""
     
     settings = config.active_sessions.get(session_id, {}).get('settings', {})
@@ -80,17 +81,17 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
 
             # Skip service messages silently (as requested)
             if getattr(message, 'action', None): 
-                # config.logger.debug(f"Skipping service message {message.id}")
                 continue
 
             stream_file = None
+            sent_message = None # To track the sent message for logging
             
             try:
                 # Handle text-only messages
                 if not message.media or not message.file:
                     if message.text:
                         modified_text = apply_caption_manipulations(message.text, settings)
-                        await bot_client.send_message(dest_id, modified_text)
+                        sent_message = await bot_client.send_message(dest_id, modified_text)
                         total_success += 1
                     total_processed += 1
                     continue
@@ -162,6 +163,9 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
                     parts = math.ceil(file_size / SPLIT_THRESHOLD)
                     config.logger.info(f"✂️ Splitting {file_name} into {parts} parts")
 
+                    # We can't easily log split files as a single file because they are separate messages.
+                    # We will log each part.
+
                     for i in range(parts):
                         part_num = i + 1
                         part_name = f"{file_name}.part{part_num:03d}"
@@ -189,18 +193,30 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
                         uploaded = False
                         while retry_count < config.MAX_RETRIES and not uploaded:
                             try:
-                                await bot_client.send_file(
+                                sent_part = await bot_client.send_file(
                                     dest_id,
                                     file=split_stream,
                                     caption=part_caption,
                                     attributes=part_attributes,
-                                    thumb=thumb if i == 0 else None, # Only first part gets thumb
+                                    thumb=thumb if i == 0 else None,
                                     supports_streaming=True,
                                     file_size=part_size,
-                                    force_document=True, # Parts are always docs
+                                    force_document=True,
                                     part_size_kb=config.UPLOAD_PART_SIZE
                                 )
                                 uploaded = True
+
+                                # Log to channel (Instant Forward)
+                                if log_channel and sent_part:
+                                    try:
+                                        await bot_client.send_file(
+                                            log_channel,
+                                            file=sent_part.media,
+                                            caption=f"📝 **Log: Part {part_num}**\nTo: `{dest_id}`\n\n{part_caption}"
+                                        )
+                                    except Exception as log_e:
+                                        config.logger.error(f"Log Error: {log_e}")
+
                             except errors.FloodWaitError as e:
                                 config.logger.warning(f"⏳ FloodWait {e.seconds}s")
                                 await asyncio.sleep(e.seconds)
@@ -228,7 +244,7 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
 
                     while retry_count < config.MAX_RETRIES and not uploaded:
                         try:
-                            await bot_client.send_file(
+                            sent_message = await bot_client.send_file(
                                 dest_id,
                                 file=stream_file,
                                 caption=modified_caption,
@@ -267,6 +283,20 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
                     except:
                         pass
                 
+                # LOGGING TO CHANNEL
+                if log_channel and sent_message and uploaded:
+                    try:
+                        await bot_client.send_file(
+                            log_channel,
+                            file=sent_message.media,
+                            caption=f"📝 **Transfer Log**\n"
+                            f"👤 User: `{session_id}` (Internal)\n"
+                            f"📂 File: `{file_name}`\n"
+                            f"📤 To: `{dest_id}`"
+                        )
+                    except Exception as log_e:
+                        config.logger.error(f"Failed to log to channel: {log_e}")
+
                 elapsed = time.time() - start_time
                 speed = file_size / elapsed / (1024*1024) if elapsed > 0 else 0
                 total_size += file_size
@@ -344,4 +374,8 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
         config.status_message = None
         if session_id in config.active_sessions:
             del config.active_sessions[session_id]
+
+        # STOP USER SESSION
+        await session_manager.stop_user_session()
+
         config.logger.info("✅ Transfer process cleanup complete")

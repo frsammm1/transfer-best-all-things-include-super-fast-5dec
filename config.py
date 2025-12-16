@@ -4,8 +4,9 @@ import logging
 # --- TELEGRAM CONFIGURATION ---
 API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH")
-STRING_SESSION = os.environ.get("STRING_SESSION") 
+# STRING_SESSION is no longer global, it's per user
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
+ADMIN_ID = int(os.environ.get("ADMIN_ID", 0)) # Owner ID
 PORT = int(os.environ.get("PORT", 8080))
 
 # --- OPTIMIZED SETTINGS FOR RENDER FREE TIER ---
@@ -26,10 +27,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- RUNTIME STATE ---
-pending_requests = {}
+# active_sessions stores metadata about the transfer (settings, steps, etc)
+# It does NOT store the client anymore
 active_sessions = {}
 is_running = False
 status_message = None
 last_update_time = 0
 current_task = None
-stop_flag = False  # NEW: Global stop flag
+stop_flag = False
