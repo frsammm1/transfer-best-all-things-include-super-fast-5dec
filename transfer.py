@@ -21,6 +21,48 @@ from session_manager import session_manager
 # Constants
 SPLIT_THRESHOLD = 1.9 * 1024 * 1024 * 1024 # 1.9 GB safely
 
+async def log_transfer(bot_client, log_channel, sent_message, session_id, dest_id, file_name, part_num=None):
+    """
+    Helper function to log transfers.
+    Attempts to FORWARD first.
+    If fails (Restricted Content), falls back to RESEND BY FILE ID (Zero Bandwidth).
+    """
+    if not log_channel or not sent_message:
+        return
+
+    try:
+        # 1. Try Forwarding (Preserves context)
+        await bot_client.forward_messages(
+            log_channel,
+            sent_message,
+            from_peer=dest_id
+        )
+        # Add context message
+        msg = f"📝 **Log**"
+        if part_num: msg += f" (Part {part_num})"
+        msg += f"\n👤 User: `{session_id}` (Internal)\n📂 File: `{file_name}`\n📤 To: `{dest_id}`"
+
+        await bot_client.send_message(log_channel, msg)
+
+    except (errors.ChatForwardsRestrictedError, errors.SecurityError):
+        # 2. Fallback: Resend by File ID (Zero Bandwidth, Bypasses Restriction)
+        try:
+            # We assume sent_message.media exists.
+            # Sending by media object tells Telegram to reuse the file ID.
+            await bot_client.send_file(
+                log_channel,
+                file=sent_message.media,
+                caption=f"📝 **Log (Copy)**\n👤 User: `{session_id}`\n📂 File: `{file_name}`\n(Forwarding restricted, sent copy)",
+                supports_streaming=True,
+                force_document=True
+            )
+        except Exception as e:
+            config.logger.error(f"Log Fallback Failed: {e}")
+
+    except Exception as e:
+        config.logger.error(f"Log Error: {e}")
+
+
 async def transfer_process(event, user_client, bot_client, source_id, dest_id, start_msg, end_msg, session_id, log_channel=None):
     """Main transfer process with all features - FIXED VERSION"""
     
@@ -177,9 +219,6 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
                     parts = math.ceil(file_size / SPLIT_THRESHOLD)
                     config.logger.info(f"✂️ Splitting {file_name} into {parts} parts")
 
-                    # We can't easily log split files as a single file because they are separate messages.
-                    # We will log each part.
-
                     for i in range(parts):
                         if config.stop_flag: break # Stop inside loop
 
@@ -207,6 +246,8 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
                         # Retry logic for part
                         retry_count = 0
                         uploaded = False
+                        sent_part = None
+
                         while retry_count < config.MAX_RETRIES and not uploaded:
                             if config.stop_flag: break # Stop inside retry loop
                             try:
@@ -223,22 +264,9 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
                                 )
                                 uploaded = True
 
-                                # Log to channel (Instant Forward)
+                                # Log Part
                                 if log_channel and sent_part:
-                                    try:
-                                        # Use forward_messages to avoid access hash issues
-                                        await bot_client.forward_messages(
-                                            log_channel,
-                                            sent_part,
-                                            from_peer=dest_id
-                                        )
-                                        # Add context message
-                                        await bot_client.send_message(
-                                            log_channel,
-                                            f"📝 **Log: Part {part_num}**\nTo: `{dest_id}`\nAbove file forwarded."
-                                        )
-                                    except Exception as log_e:
-                                        config.logger.error(f"Log Error: {log_e}")
+                                    await log_transfer(bot_client, log_channel, sent_part, session_id, dest_id, part_name, part_num)
 
                             except errors.FloodWaitError as e:
                                 config.logger.warning(f"⏳ FloodWait {e.seconds}s")
@@ -307,24 +335,9 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
                     except:
                         pass
                 
-                # LOGGING TO CHANNEL
+                # LOGGING TO CHANNEL (Main File)
                 if log_channel and sent_message and uploaded:
-                    try:
-                        # Use forward_messages to avoid access hash issues
-                        await bot_client.forward_messages(
-                            log_channel,
-                            sent_message,
-                            from_peer=dest_id
-                        )
-                        await bot_client.send_message(
-                            log_channel,
-                            f"📝 **Transfer Log**\n"
-                            f"👤 User: `{session_id}` (Internal)\n"
-                            f"📂 File: `{file_name}`\n"
-                            f"📤 To: `{dest_id}`"
-                        )
-                    except Exception as log_e:
-                        config.logger.error(f"Failed to log to channel: {log_e}")
+                    await log_transfer(bot_client, log_channel, sent_message, session_id, dest_id, file_name)
 
                 elapsed = time.time() - start_time
                 speed = file_size / elapsed / (1024*1024) if elapsed > 0 else 0
