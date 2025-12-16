@@ -1,6 +1,7 @@
 import asyncio
 import uuid
 import time
+import datetime
 from telethon import events, Button, errors
 from telethon.tl.types import User
 import config
@@ -120,16 +121,22 @@ def register_handlers(bot_client):
             duration = int(duration_str[:-1]) * multiplier
 
             new_expiry = await db.update_validity(target_id, duration)
-            expiry_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(new_expiry))
 
-            await event.respond(f"✅ User `{target_id}` updated!\nExpires: `{expiry_date}`")
+            # Format to IST
+            # IST is UTC+5:30. new_expiry is UNIX timestamp (UTC based).
+            utc_dt = datetime.datetime.fromtimestamp(new_expiry, datetime.timezone.utc)
+            ist_offset = datetime.timedelta(hours=5, minutes=30)
+            ist_dt = utc_dt + ist_offset
+            expiry_date = ist_dt.strftime('%Y-%m-%d %H:%M:%S')
+
+            await event.respond(f"✅ User `{target_id}` updated!\nExpires: `{expiry_date}` (IST)")
 
             # Notify User
             try:
                 await bot_client.send_message(
                     target_id,
                     f"🎉 **Subscription Activated!**\n\n"
-                    f"You have been granted access until:\n`{expiry_date}`\n\n"
+                    f"You have been granted access until:\n`{expiry_date}` (IST)\n\n"
                     f"👉 Use `/login` to connect your account."
                 )
             except:
