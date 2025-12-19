@@ -31,12 +31,24 @@ def extract_link_info(link):
 
     link = link.strip()
 
-    # Regex for Private Links (t.me/c/ID/MSG_ID)
+    # Regex for Private Links (t.me/c/ID/MSG_ID or t.me/c/ID/TOPIC_ID/MSG_ID)
     # ID is usually the channel ID without -100 prefix
-    private_match = re.search(r't\.me/c/(\d+)/(\d+)', link)
+    # If 3 numbers, the middle one is topic ID (ignored here), last is msg_id
+    private_match = re.search(r't\.me/c/(\d+)(?:/(\d+))?/(\d+)', link)
     if private_match:
         chat_id_str = private_match.group(1)
-        msg_id = int(private_match.group(2))
+        # group(2) is topic_id or msg_id depending on format
+        # group(3) is msg_id if topic exists
+
+        if private_match.group(3):
+            # Format: .../c/ID/TOPIC/MSG
+            msg_id = int(private_match.group(3))
+        elif private_match.group(2):
+            # Format: .../c/ID/MSG
+            msg_id = int(private_match.group(2))
+        else:
+            # Should not happen given the regex structure but fallback
+            return None, None
 
         # Telethon usually expects -100 for private channels/supergroups
         # If the ID provided is just digits (like 123456), we prepend -100
