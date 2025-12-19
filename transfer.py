@@ -201,6 +201,25 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
                             if hasattr(message.media, 'document') 
                             else message.media.photo)
                 
+                # Determine force_document strategy
+                # If source is Photo, force_document=False (send as photo)
+                # If source is Video/Audio/Doc, depends on is_video_mode
+
+                force_document_flag = True # Default to file
+
+                if message.photo:
+                    # It was originally a photo, try to keep it as photo
+                    force_document_flag = False
+                elif is_video_mode:
+                    # If it's a video, we want it streamable (not as file)
+                    force_document_flag = False
+
+                # NOTE: If user explicitly wants to "Rename" a photo to .pdf, get_target_info handles that.
+                # But here we assume "Clone" intent mostly.
+
+                # Only use supports_streaming for Video/Audio
+                supports_streaming_flag = is_video_mode or "audio" in mime_type
+
                 # CREATE MAIN STREAM
                 stream_file = ExtremeBufferedStream(
                     user_client, 
@@ -257,9 +276,9 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
                                     caption=part_caption,
                                     attributes=part_attributes,
                                     thumb=thumb if i == 0 else None,
-                                    supports_streaming=True,
+                                    supports_streaming=False, # Parts are files
                                     file_size=part_size,
-                                    force_document=True,
+                                    force_document=True, # Parts are always files
                                     part_size_kb=config.UPLOAD_PART_SIZE
                                 )
                                 uploaded = True
@@ -302,9 +321,9 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
                                 caption=modified_caption,
                                 attributes=attributes,
                                 thumb=thumb,
-                                supports_streaming=True,
+                                supports_streaming=supports_streaming_flag,
                                 file_size=file_size,
-                                force_document=not is_video_mode,
+                                force_document=force_document_flag,
                                 part_size_kb=config.UPLOAD_PART_SIZE
                             )
                             uploaded = True

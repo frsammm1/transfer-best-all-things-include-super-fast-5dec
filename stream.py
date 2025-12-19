@@ -32,6 +32,56 @@ async def progress_callback(current, total, start_time, file_name, status_msg):
     except Exception as e:
         config.logger.debug(f"Progress update failed: {e}")
 
+class ByteLimitedQueue:
+    """
+    A Queue that respects a byte limit instead of item limit.
+    This solves the issue where small chunks (128KB) fill the item limit
+    causing the downloader to stall, while the uploader starves waiting for
+    large parts (16MB).
+    """
+    def __init__(self, max_bytes):
+        self.max_bytes = max_bytes
+        self.current_bytes = 0
+        self.queue = asyncio.Queue() # Unbounded items, bounded by logic below
+        self.condition = asyncio.Condition()
+
+    async def put(self, item):
+        async with self.condition:
+            # If item is None (EOF), we always accept it
+            if item is None:
+                await self.queue.put(None)
+                return
+
+            size = len(item)
+            # Wait if adding this item would exceed max_bytes
+            # But always allow at least one item to avoid deadlock if item > max_bytes
+            while self.current_bytes + size > self.max_bytes and self.current_bytes > 0:
+                await self.condition.wait()
+
+            await self.queue.put(item)
+            self.current_bytes += size
+            self.condition.notify_all()
+
+    async def get(self):
+        item = await self.queue.get()
+
+        if item is None:
+            # Put it back for other consumers if any (though we only have one)
+            # Actually, standard pattern is to return None and not decrement
+            return None
+
+        async with self.condition:
+            self.current_bytes -= len(item)
+            self.condition.notify_all()
+
+        return item
+
+    def empty(self):
+        return self.queue.empty()
+
+    def get_nowait(self):
+        return self.queue.get_nowait()
+
 class SplitFile:
     """Wrapper to split a large stream into virtual parts"""
     def __init__(self, stream, max_size):
@@ -67,8 +117,9 @@ class SplitFile:
 
 class ExtremeBufferedStream:
     """
-    Optimized streaming with 1MB chunks and 80-queue buffer (80MB total)
-    Perfect for Render free tier (512MB RAM) - Smoother streaming
+    Optimized streaming using ByteLimitedQueue.
+    Buffer size is controlled by RAM usage (e.g. 80MB) regardless of chunk count.
+    Solves cross-DC 128KB chunk starvation issues.
     """
     def __init__(self, client, location, file_size, file_name, start_time, status_msg):
         self.client = client
@@ -79,9 +130,10 @@ class ExtremeBufferedStream:
         self.status_msg = status_msg
         self.current_bytes = 0
         
-        # Optimized settings for free tier
+        # Optimized settings
         self.chunk_size = config.CHUNK_SIZE
-        self.queue = asyncio.Queue(maxsize=config.QUEUE_SIZE)  # 80MB buffer
+        # Use 80MB byte limit instead of item limit
+        self.queue = ByteLimitedQueue(max_bytes=80 * 1024 * 1024)
         
         self.downloader_task = None
         self.buffer = b""
@@ -201,7 +253,7 @@ class ExtremeBufferedStream:
         # Drain queue
         while not self.queue.empty():
             try:
-                self.queue.get_nowait()
+                await self.queue.get()
             except:
                 break
         
