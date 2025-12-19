@@ -12,7 +12,8 @@ import config
 from utils import (
     human_readable_size, time_formatter, 
     get_target_info, apply_filename_manipulations,
-    apply_caption_manipulations, sanitize_filename
+    apply_caption_manipulations, sanitize_filename,
+    is_special_media
 )
 from stream import ExtremeBufferedStream, SplitFile
 from keyboards import get_progress_keyboard
@@ -129,6 +130,28 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
             sent_message = None # To track the sent message for logging
             
             try:
+                # --- UNIVERSAL TRANSFER: Polls, Geo, Venues, etc. ---
+                if is_special_media(message):
+                    config.logger.info(f"✨ Sending Special Media: {type(message.media)}")
+                    try:
+                        # Direct Copy (Zero Bandwidth)
+                        sent_message = await bot_client.send_message(
+                            dest_id,
+                            message.text or "",
+                            file=message.media
+                        )
+                        total_success += 1
+                        total_processed += 1
+                        await status_message.edit(
+                            f"✅ **Sent:** `Special Media`\n"
+                            f"📊 Progress: {idx}/{len(found_messages)}\n",
+                            buttons=get_progress_keyboard()
+                        )
+                        continue
+                    except Exception as sm_e:
+                        config.logger.error(f"Special Media Failed: {sm_e}")
+                        # If simple copy fails, proceed (it might be skipped)
+
                 # Handle text-only messages
                 if not message.media or not message.file:
                     if message.text:
@@ -156,6 +179,7 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
                 file_name, mime_type, is_video_mode = get_target_info(message)
                 
                 if not file_name:
+                    # This happens if it's special media that failed detection or unknown
                     total_processed += 1
                     continue
                 

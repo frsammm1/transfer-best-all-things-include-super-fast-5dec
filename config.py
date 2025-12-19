@@ -14,10 +14,13 @@ ADMIN_ID = int(os.environ.get("ADMIN_ID", 0)) # Owner ID
 PORT = int(os.environ.get("PORT", 8080))
 
 # --- OPTIMIZED SETTINGS FOR RENDER FREE TIER ---
-# Increased chunk size for speed, reduced queue size to maintain memory safety
-CHUNK_SIZE = 8 * 1024 * 1024  # 8MB chunks (Even better speed)
-QUEUE_SIZE = 10  # 8MB * 10 = 80MB buffer (Maintains memory footprint)
-UPLOAD_PART_SIZE = 16 * 1024 * 1024  # 16MB upload parts (Faster uploads)
+# Further increased for speed while monitoring RAM
+# 16MB is the sweet spot for Telethon upload parts
+CHUNK_SIZE = 16 * 1024 * 1024  # 16MB Download chunks
+UPLOAD_PART_SIZE = 32 * 1024 * 1024  # 32MB Upload parts (Better throughput)
+QUEUE_SIZE = 6 # Not used with ByteLimitedQueue, but kept for legacy
+MAX_RAM_BUFFER = 100 * 1024 * 1024 # 100MB buffer for stream
+
 UPDATE_INTERVAL = 5  # Progress update interval (seconds)
 MAX_RETRIES = 3  # Retry attempts per file
 FLOOD_SLEEP_THRESHOLD = 120

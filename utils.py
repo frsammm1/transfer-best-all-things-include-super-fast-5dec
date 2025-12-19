@@ -1,7 +1,11 @@
 import os
 import mimetypes
 import re
-from telethon.tl.types import MessageMediaWebPage
+from telethon.tl.types import (
+    MessageMediaWebPage, MessageMediaPoll, MessageMediaVenue,
+    MessageMediaGeo, MessageMediaContact, MessageMediaDice,
+    MessageMediaGame, MessageMediaInvoice
+)
 
 def human_readable_size(size):
     """Convert bytes to human readable format"""
@@ -68,18 +72,35 @@ def extract_link_info(link):
 
     return None, None
 
+def is_special_media(message):
+    """Checks if message contains special media that cannot be downloaded as file"""
+    if not message.media:
+        return False
+
+    return isinstance(message.media, (
+        MessageMediaPoll,
+        MessageMediaVenue,
+        MessageMediaGeo,
+        MessageMediaContact,
+        MessageMediaDice,
+        MessageMediaGame,
+        MessageMediaInvoice,
+        MessageMediaWebPage
+    ))
+
 def get_target_info(message):
     """
     Smart format detection and conversion
     Video -> MP4, Image -> JPG, Doc -> PDF
     """
+    # Special Check for Non-File Media
+    if is_special_media(message):
+        return None, None, False
+
     original_name = "Unknown_File"
     target_mime = "application/octet-stream"
     force_video = False
     
-    if isinstance(message.media, MessageMediaWebPage):
-        return None, None, False
-
     if message.file:
         original_mime = message.file.mime_type
         if message.file.name:
@@ -88,6 +109,7 @@ def get_target_info(message):
             ext = mimetypes.guess_extension(original_mime) or ""
             original_name = f"File_{message.id}{ext}"
     else:
+        # Fallback for Photos without file attributes
         original_mime = "image/jpeg"
         original_name = f"Image_{message.id}.jpg"
 

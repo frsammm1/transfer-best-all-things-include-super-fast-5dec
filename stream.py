@@ -118,7 +118,7 @@ class SplitFile:
 class ExtremeBufferedStream:
     """
     Optimized streaming using ByteLimitedQueue.
-    Buffer size is controlled by RAM usage (e.g. 80MB) regardless of chunk count.
+    Buffer size is controlled by RAM usage (e.g. 100MB) regardless of chunk count.
     Solves cross-DC 128KB chunk starvation issues.
     """
     def __init__(self, client, location, file_size, file_name, start_time, status_msg):
@@ -132,8 +132,8 @@ class ExtremeBufferedStream:
         
         # Optimized settings
         self.chunk_size = config.CHUNK_SIZE
-        # Use 80MB byte limit instead of item limit
-        self.queue = ByteLimitedQueue(max_bytes=80 * 1024 * 1024)
+        # Use config defined byte limit
+        self.queue = ByteLimitedQueue(max_bytes=config.MAX_RAM_BUFFER)
         
         self.downloader_task = None
         self.buffer = b""
@@ -194,7 +194,8 @@ class ExtremeBufferedStream:
         # Fill buffer to requested size
         while len(self.buffer) < size and not self.closed:
             try:
-                chunk = await asyncio.wait_for(self.queue.get(), timeout=30.0)
+                # Wait for data (increased timeout for large files/slow network)
+                chunk = await asyncio.wait_for(self.queue.get(), timeout=60.0)
                 
                 if chunk is None:
                     # End of stream
