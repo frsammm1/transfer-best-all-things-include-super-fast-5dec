@@ -1,5 +1,9 @@
 import os
 import logging
+from dotenv import load_dotenv
+
+# Load .env file if present
+load_dotenv()
 
 # --- TELEGRAM CONFIGURATION ---
 API_ID = int(os.environ.get("API_ID", 0))

@@ -47,6 +47,13 @@ async def main():
     # We ONLY start the Bot Client here.
     # User Clients are started dynamically via SessionManager.
 
+    # Validate Config
+    if not config.API_ID or not config.API_HASH:
+        config.logger.error("❌ MISSING CONFIGURATION!")
+        config.logger.error("Please set API_ID and API_HASH in your Environment Variables.")
+        config.logger.error("Exiting...")
+        return
+
     bot_client = TelegramClient(
         'bot_session',
         config.API_ID,
