@@ -342,6 +342,34 @@ def register_handlers(bot_client):
         await event.respond("👋 **Logged Out**")
         raise events.StopPropagation
 
+    # --- STOP & CANCEL HANDLERS ---
+    @bot_client.on(events.NewMessage(pattern='/stop'))
+    async def stop_command_handler(event):
+        if config.is_running:
+            config.stop_flag = True
+            await event.respond("🛑 **Stopping transfer...**\nPlease wait for the current file to finish.")
+        else:
+            await event.respond("⚠️ No active transfer to stop.")
+        raise events.StopPropagation
+
+    @bot_client.on(events.NewMessage(pattern='/cancel'))
+    async def cancel_command_handler(event):
+        user_id = event.sender_id
+
+        # Check for active session
+        session_id = None
+        for sid, data in config.active_sessions.items():
+            if data['user_id'] == user_id:
+                session_id = sid
+                break
+
+        if session_id:
+            del config.active_sessions[session_id]
+            await event.respond("❌ **Session Cancelled**\nYou can start a new clone process with `/clone`.")
+        else:
+            await event.respond("⚠️ No active session to cancel.")
+        raise events.StopPropagation
+
     # --- CLONE HANDLER (UPDATED - New Flow) ---
     @bot_client.on(events.NewMessage(pattern='/clone'))
     async def clone_init(event):
@@ -449,39 +477,61 @@ def register_handlers(bot_client):
                 session['start_msg'] = start_msg
 
             session['end_msg'] = msg_id
-            session['step'] = 'wait_dest_id'
+            session['step'] = 'wait_dest_selection'
 
             await event.respond(
                 f"✅ Range Set: `{start_msg}` to `{msg_id}`\n"
                 f"📂 Source: `{source}`\n\n"
                 "📤 **Step 3/3: Destination**\n"
-                "Please send the **Destination Channel/Group ID** (e.g., `-100xxxx`).\n"
-                "Make sure the User Account is a member/admin there.",
-                buttons=[[Button.inline("❌ Cancel", f"cancel_{session_id}")]]
+                "Where do you want to transfer the files?",
+                buttons=[
+                    [
+                        Button.inline("🤖 Transfer in the bot", f"transfer_me_{session_id}"),
+                        Button.inline("📢 Transfer to Group/Channel", f"transfer_group_{session_id}")
+                    ],
+                    [Button.inline("❌ Cancel", f"cancel_{session_id}")]
+                ]
             )
 
-        elif step == 'wait_dest_id':
-            try:
-                dest_id = int(event.text.strip())
-                if dest_id == session['source']:
-                     return await event.respond("❌ Destination cannot be same as source!")
+        elif step == 'wait_dest_input':
+            dest_id = None
 
-                session['dest'] = dest_id
-                session['step'] = 'settings'
+            # Check for Forwarded Message
+            if event.message.fwd_from:
+                if event.message.fwd_from.channel_id:
+                     dest_id = int(f"-100{event.message.fwd_from.channel_id}")
+                elif event.message.fwd_from.from_id:
+                     # This might be a user ID or other peer
+                     # For simplicity, we might just take it if it's available
+                     pass
 
-                # Show Settings Panel
-                await event.respond(
-                    f"✅ **Clone Setup Complete**\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📥 Source: `{session['source']}`\n"
-                    f"📤 Destination: `{dest_id}`\n"
-                    f"🔢 Range: `{session['start_msg']}` - `{session['end_msg']}`\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"Configure settings or click Start:",
-                    buttons=get_settings_keyboard(session_id)
-                )
-            except ValueError:
-                await event.respond("❌ **Invalid ID**\nPlease send a valid numeric ID (e.g., `-100123456789`).")
+            # Check for Text Input
+            if not dest_id and event.text:
+                try:
+                    dest_id = int(event.text.strip())
+                except ValueError:
+                    pass
+
+            if not dest_id:
+                 return await event.respond("❌ **Invalid Destination**\nPlease send a valid numeric ID or Forward a message from the channel.")
+
+            if dest_id == session['source']:
+                    return await event.respond("❌ Destination cannot be same as source!")
+
+            session['dest'] = dest_id
+            session['step'] = 'settings'
+
+            # Show Settings Panel
+            await event.respond(
+                f"✅ **Clone Setup Complete**\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"📥 Source: `{session['source']}`\n"
+                f"📤 Destination: `{dest_id}`\n"
+                f"🔢 Range: `{session['start_msg']}` - `{session['end_msg']}`\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"Configure settings or click Start:",
+                buttons=get_settings_keyboard(session_id)
+            )
 
         # --- SETTINGS HANDLERS (Same as before) ---
         elif step == 'fname_find':
@@ -511,6 +561,37 @@ def register_handlers(bot_client):
 
 
     # --- CALLBACKS (Need to re-register these) ---
+    @bot_client.on(events.CallbackQuery(pattern=r'transfer_me_(.+)'))
+    async def transfer_me_cb(event):
+        sid = event.data.decode().split('_')[2]
+        if sid in config.active_sessions:
+            config.active_sessions[sid]['dest'] = "me"
+            config.active_sessions[sid]['step'] = 'settings'
+
+            await event.edit(
+                f"✅ **Clone Setup Complete**\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"📥 Source: `{config.active_sessions[sid]['source']}`\n"
+                f"📤 Destination: `Saved Messages`\n"
+                f"🔢 Range: `{config.active_sessions[sid]['start_msg']}` - `{config.active_sessions[sid]['end_msg']}`\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"Configure settings or click Start:",
+                buttons=get_settings_keyboard(sid)
+            )
+
+    @bot_client.on(events.CallbackQuery(pattern=r'transfer_group_(.+)'))
+    async def transfer_group_cb(event):
+        sid = event.data.decode().split('_')[2]
+        if sid in config.active_sessions:
+            config.active_sessions[sid]['step'] = 'wait_dest_input'
+            await event.edit(
+                "📤 **Step 3/3: Destination**\n\n"
+                "Please send the **Destination Channel/Group ID** (e.g., `-100xxxx`).\n"
+                "OR **Forward a message** from the destination channel to here.\n\n"
+                "⚠️ Make sure the User Account is a member/admin there.",
+                buttons=[[Button.inline("❌ Cancel", f"cancel_{sid}")]]
+            )
+
     @bot_client.on(events.CallbackQuery(pattern=r'set_fname_(.+)'))
     async def set_fname_cb(event):
         sid = event.data.decode().split('_')[2]
