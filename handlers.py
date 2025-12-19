@@ -3,7 +3,7 @@ import uuid
 import time
 import datetime
 from telethon import events, Button, errors
-from telethon.tl.types import User
+from telethon.tl.types import User, PeerChannel, PeerChat, PeerUser
 import config
 from keyboards import (
     get_settings_keyboard, get_confirm_keyboard,
@@ -32,6 +32,13 @@ def register_handlers(bot_client):
             return "ADMIN"
         is_valid, _, _ = await db.check_user(user_id)
         return "PAID" if is_valid else "FREE"
+
+    # --- ID HANDLER ---
+    @bot_client.on(events.NewMessage(pattern='/id'))
+    async def id_handler(event):
+        """Replies with the current chat ID"""
+        await event.reply(f"🆔 Chat ID: `{event.chat_id}`")
+        raise events.StopPropagation
 
     # --- START HANDLER ---
     @bot_client.on(events.NewMessage(pattern='/start'))
@@ -498,12 +505,18 @@ def register_handlers(bot_client):
 
             # Check for Forwarded Message
             if event.message.fwd_from:
-                if event.message.fwd_from.channel_id:
-                     dest_id = int(f"-100{event.message.fwd_from.channel_id}")
-                elif event.message.fwd_from.from_id:
-                     # This might be a user ID or other peer
-                     # For simplicity, we might just take it if it's available
-                     pass
+                # Try to extract from from_id (Peer)
+                fwd_peer = event.message.fwd_from.from_id
+                if fwd_peer:
+                    if isinstance(fwd_peer, PeerChannel):
+                        dest_id = int(f"-100{fwd_peer.channel_id}")
+                    elif isinstance(fwd_peer, PeerChat):
+                        dest_id = int(f"-{fwd_peer.chat_id}")
+                    elif isinstance(fwd_peer, PeerUser):
+                        dest_id = int(fwd_peer.user_id)
+
+                # Some older Telethon/Layer versions might behave differently,
+                # but from_id is the standard way to get the source Peer.
 
             # Check for Text Input
             if not dest_id and event.text:
