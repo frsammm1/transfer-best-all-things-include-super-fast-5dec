@@ -8,11 +8,11 @@ The ultimate high-performance Telegram File Transfer Bot, now with an enhanced s
 - **Sequential Clone**: Simplified `/clone` command guides you step-by-step.
 - **Range Selection**: Just send the first link and the last link. The bot automatically detects the channel/group.
 - **Smart Link Detection**: Now supports Topic links (`t.me/c/ID/TOPIC/MSG`) correctly.
-- **Auto-Detection**: Supports both Private (`t.me/c/..`) and Public (`t.me/username/..`) links.
-- **Flexible Destination**: Choose "Transfer in Bot" or "Transfer to Channel".
+- **Flexible Destination**: Choose "Transfer in Bot" or "Transfer to Channel" via interactive buttons.
 - **Easy Input**: Forward a message from the destination channel to set it automatically.
 - **Control**: New `/stop` and `/cancel` commands to manage tasks.
 - **Identify Chat**: Use `/id` in any group/channel (where bot is admin) to get the Chat ID.
+- **Smart Link Previews**: Optimized handling for Web Page previews (text only).
 
 ### 👑 Admin Panel
 - **User Management**: Grant, revoke, and monitor user access.

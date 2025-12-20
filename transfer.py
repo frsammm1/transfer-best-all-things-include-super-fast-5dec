@@ -6,7 +6,8 @@ from telethon import errors
 from telethon.tl.types import (
     DocumentAttributeFilename, 
     DocumentAttributeVideo, 
-    DocumentAttributeAudio
+    DocumentAttributeAudio,
+    MessageMediaWebPage
 )
 import config
 from utils import (
@@ -130,6 +131,11 @@ async def transfer_process(event, user_client, bot_client, source_id, dest_id, s
             sent_message = None # To track the sent message for logging
             
             try:
+                # --- WEB PAGE HANDLING ---
+                # Treat WebPages (Link Previews) as text-only messages
+                if isinstance(message.media, MessageMediaWebPage):
+                    message.media = None
+
                 # --- UNIVERSAL TRANSFER: Polls, Geo, Venues, etc. ---
                 if is_special_media(message):
                     config.logger.info(f"✨ Sending Special Media: {type(message.media)}")

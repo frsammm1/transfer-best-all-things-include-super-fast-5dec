@@ -84,8 +84,7 @@ def is_special_media(message):
         MessageMediaContact,
         MessageMediaDice,
         MessageMediaGame,
-        MessageMediaInvoice,
-        MessageMediaWebPage
+        MessageMediaInvoice
     ))
 
 def get_target_info(message):
