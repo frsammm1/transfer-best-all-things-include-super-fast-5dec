@@ -15,10 +15,10 @@ PORT = int(os.environ.get("PORT", 8080))
 
 # --- OPTIMIZED SETTINGS FOR RENDER FREE TIER ---
 # Reverted to stable settings to prevent crashes
-CHUNK_SIZE = 16 * 1024 * 1024  # 16MB chunks (Faster)
-UPLOAD_PART_SIZE = 16 * 1024 * 1024  # 16MB upload parts (Stable)
+CHUNK_SIZE = 4 * 1024 * 1024  # 4MB chunks (Standard)
+UPLOAD_PART_SIZE = 4 * 1024 * 1024  # 4MB upload parts (Stable)
 QUEUE_SIZE = 10  # Legacy setting
-MAX_RAM_BUFFER = 80 * 1024 * 1024 # 80MB buffer (Safe for 512MB RAM)
+MAX_RAM_BUFFER = 30 * 1024 * 1024 # 30MB buffer (Safe for 512MB RAM)
 
 UPDATE_INTERVAL = 5  # Progress update interval (seconds)
 MAX_RETRIES = 3  # Retry attempts per file
